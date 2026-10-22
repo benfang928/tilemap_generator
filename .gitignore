@@ -1,0 +1,11 @@
+# Python and generated test artifacts
+__pycache__/
+*.py[cod]
+output/
+
+# Local dependencies and editor files
+node_modules/
+.env
+.env.*
+.DS_Store
+Thumbs.db

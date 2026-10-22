@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>格子地图生成器 · AI Map Studio</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">▦</div>
+      <div class="brand-text">
+        <h1>格子地图生成器</h1>
+        <span>地砖图集 + 前景图集 → 素材提取 → 自动拼图 → 手动编辑</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="pill" id="projectPill">未命名地图</span>
+      <button class="btn ghost" id="btnHelp">使用说明</button>
+      <button class="btn ghost" id="btnImportProject">导入工程</button>
+      <button class="btn ghost" id="btnExportProject">导出工程</button>
+      <button class="btn primary" id="btnSaveLocal">保存草稿</button>
+    </div>
+  </header>
+
+  <nav class="stepper" id="stepper">
+    <button class="step" data-step="1">
+      <i>1</i>
+      <span><b>生成两张图集</b><em>地砖 / 前景 / 上传</em></span>
+    </button>
+    <button class="step" data-step="2">
+      <i>2</i>
+      <span><b>提取图集素材</b><em>固定网格 + 透明抠图</em></span>
+    </button>
+    <button class="step" data-step="3">
+      <i>3</i>
+      <span><b>拼成地图</b><em>规则布局 / 封边 / 连通</em></span>
+    </button>
+    <button class="step" data-step="4">
+      <i>4</i>
+      <span><b>手动调整</b><em>画笔 / 阻挡 / 导出</em></span>
+    </button>
+  </nav>
+
+  <main class="workspace">
+
+    <!-- ================= 左侧流程面板 ================= -->
+    <aside class="panel-left">
+
+      <!-- STEP 1 -->
+      <section class="step-panel" data-panel="1">
+        <header class="panel-head">
+          <h2>生成两张图集</h2>
+          <span class="tag">Step 1</span>
+        </header>
+
+        <div class="field">
+            <label for="prompt">素材风格与主题</label>
+          <textarea id="prompt" rows="4" placeholder="例：黄昏丘陵草原，松树林与碎石坡道，柔和手绘材质"></textarea>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="biome">地貌</label>
+            <select id="biome">
+              <option value="grassland">草地 / 平原</option>
+              <option value="desert">沙漠 / 荒野</option>
+              <option value="snow">雪地 / 冰原</option>
+              <option value="cave">洞穴 / 地下</option>
+              <option value="town">城镇 / 主城</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="genSize">每张图集尺寸</label>
+            <select id="genSize">
+              <option value="1024">1024 × 1024</option>
+              <option value="1536">1536 × 1536</option>
+              <option value="2048">2048 × 2048</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="seed">随机种子</label>
+          <div class="inline">
+            <input id="seed" type="number" value="20261020" />
+            <button class="btn mini" id="btnSeed">换一个</button>
+          </div>
+        </div>
+
+        <p class="panel-desc">先生成两张排列规则的素材图集，再提取与拼图。每张可独立重试；一键生成会调用两次生图接口。</p>
+        <button class="btn primary block" id="btnGenBoth">一键生成两张图集</button>
+        <div class="btn-row">
+          <button class="btn primary grow" id="btnGenAI">生成地砖图集</button>
+          <button class="btn grow" id="btnGenObjects">生成前景图集</button>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn grow" id="btnGenDemo">生成演示双图集</button>
+        </div>
+
+        <div class="atlas-upload-grid">
+          <label class="dropzone" id="dropTileUpload">
+            <input type="file" id="fileTileSheet" accept="image/*" hidden />
+            <strong>上传地砖图集</strong><span>4 × 4 网格</span>
+          </label>
+          <label class="dropzone" id="dropObjectUpload">
+            <input type="file" id="fileObjectSheet" accept="image/*" hidden />
+            <strong>上传前景图集</strong><span>4 × 2 网格</span>
+          </label>
+        </div>
+
+        <div class="atlas-preview-grid" id="atlasPreviewGrid">
+          <button type="button" data-atlas="tiles"><span id="tileSheetLabel">地砖图集 · 待生成</span><img id="tileSheetPreview" alt="地砖图集预览" hidden /></button>
+          <button type="button" data-atlas="objects"><span id="objectSheetLabel">前景图集 · 待生成</span><img id="objectSheetPreview" alt="前景图集预览" hidden /></button>
+        </div>
+        <p class="hint" id="atlasManifest">地砖按行：草地 / 土路 / 水面 / 岩地；每行 4 种变化。前景按从左到右、从上到下排列。</p>
+
+        <div class="status-line" id="conceptStatus">还没有图集，先生成或分别上传两张。</div>
+        <p class="hint">修改主题或地貌后，新图会开始一套素材。替换图集或重新提取会清空旧地图，请先导出需要保留的工程。</p>
+
+        <details class="settings" id="aiSettings">
+          <summary>AI 接口设置</summary>
+          <div class="field">
+            <label for="aiProvider">生图服务</label>
+            <select id="aiProvider">
+              <option value="openai">OpenAI / 兼容中转</option>
+              <option value="gemini">Google Gemini / Nano Banana</option>
+              <option value="ark">火山方舟（豆包 Seedream）</option>
+              <option value="dashscope">阿里云百炼（通义万相）</option>
+              <option value="zhipu">智谱 GLM（CogView）</option>
+              <option value="siliconflow">硅基流动 SiliconFlow</option>
+              <option value="stability">Stability AI</option>
+              <option value="sdwebui">本地 SD WebUI / Forge</option>
+              <option value="custom">自定义（请求模板）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="aiBase">接口地址 Base URL</label>
+            <input id="aiBase" type="text" placeholder="https://api.openai.com/v1" />
+          </div>
+          <div class="field">
+            <label for="aiKey">API Key</label>
+            <input id="aiKey" type="password" placeholder="sk-..." autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="aiImageModel">生图模型</label>
+              <input id="aiImageModel" type="text" placeholder="gpt-image-1" />
+            </div>
+            <div class="field">
+              <label for="aiVisionModel">视觉模型</label>
+              <input id="aiVisionModel" type="text" placeholder="gpt-4o" />
+            </div>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="aiProxy" checked />
+            <span>通过本地代理转发（避开浏览器跨域）</span>
+          </label>
+          <div class="btn-row">
+            <button class="btn mini" id="btnTestAI">测试连接</button>
+            <span class="hint" id="aiStatus">Key 仅保存在本机浏览器</span>
+          </div>
+
+          <details class="settings inner" id="aiAdvanced">
+            <summary>高级（字段映射 / 自定义模板）</summary>
+            <div class="field">
+              <label for="aiImagePath">生图接口路径</label>
+              <input id="aiImagePath" type="text" placeholder="/images/generations" />
+            </div>
+            <div class="field">
+              <label for="aiRespPath">响应图片字段路径</label>
+              <input id="aiRespPath" type="text" placeholder="留空自动探测，如 data[0].b64_json / data[0].url" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="aiAuth">鉴权方式</label>
+                <select id="aiAuth">
+                  <option value="bearer">Authorization: Bearer</option>
+                  <option value="x-api-key">x-api-key</option>
+                  <option value="query">URL ?key=</option>
+                  <option value="none">不鉴权（本地服务）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="aiSizeFormat">尺寸格式</label>
+                <select id="aiSizeFormat">
+                  <option value="x">1024x1024</option>
+                  <option value="star">1024*1024</option>
+                  <option value="pixel">像素总数</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="aiExtraBody">请求体模板 / 附加字段（JSON）</label>
+              <textarea id="aiExtraBody" rows="3" placeholder='{"model":"{{model}}","prompt":"{{prompt}}","size":"{{size}}","steps":30}'></textarea>
+              <p class="hint">填入后整段作为请求体，可用 {{prompt}} {{model}} {{size}} {{width}} {{height}} {{n}} 占位。</p>
+            </div>
+            <div class="field">
+              <label for="aiVisionProvider">视觉分析服务</label>
+              <select id="aiVisionProvider">
+                <option value="same">跟随生图服务</option>
+                <option value="openai">OpenAI / 兼容中转</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="ark">火山方舟</option>
+                <option value="dashscope">阿里云百炼</option>
+                <option value="zhipu">智谱 GLM</option>
+                <option value="siliconflow">硅基流动</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="aiVisionBase">视觉 Base URL</label>
+                <input id="aiVisionBase" type="text" placeholder="留空跟随上方" />
+              </div>
+              <div class="field">
+                <label for="aiVisionKey">视觉 Key</label>
+                <input id="aiVisionKey" type="password" placeholder="留空复用上方" autocomplete="off" />
+              </div>
+            </div>
+          </details>
+        </details>
+      </section>
+
+      <!-- STEP 2 -->
+      <section class="step-panel" data-panel="2" hidden>
+        <header class="panel-head">
+          <h2>提取图集素材</h2>
+          <span class="tag">Step 2</span>
+        </header>
+
+        <p class="panel-desc">按约定的 4×4 地砖图集和 4×2 前景图集切片；前景使用品红背景抠成透明 PNG。</p>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="tileSize">提取地砖尺寸（宽×高）</label>
+            <select id="tileSize">
+              <option value="48,32">48 × 32 px（单格）</option>
+              <option value="96,64" selected>96 × 64 px（底砖）</option>
+              <option value="192,128">192 × 128 px（2×源图）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="objectTolerance">前景抠图容差</label>
+            <input id="objectTolerance" type="number" min="10" max="240" value="105" />
+          </div>
+        </div>
+
+        <label class="check">
+          <input type="checkbox" id="chkOverlay" checked />
+          <span>显示切分网格</span>
+        </label>
+        <div class="field"><label for="atlasInset">单格向内裁切（%）</label><input id="atlasInset" type="number" min="0" max="12" value="0" /><p class="hint">图集有分隔线时可设为 1–3%。按生成约定提取，随意散排的图集需先调整布局。</p></div>
+
+        <div class="btn-row">
+          <button class="btn primary grow" id="btnAnalyzeAI">提取图集素材</button>
+          <button class="btn grow" id="btnPreviewObjects">查看前景图集</button>
+        </div>
+
+        <div class="status-line" id="analyzeStatus">等待提取两张图集。</div>
+        <div class="mini-grid" id="tilePreview"></div>
+      </section>
+
+      <!-- STEP 3 -->
+      <section class="step-panel" data-panel="3" hidden>
+        <header class="panel-head">
+          <h2>拼成地图</h2>
+          <span class="tag">Step 3</span>
+        </header>
+
+        <p class="panel-desc">使用已提取的地砖和前景素材按种子生成连贯地形、道路、障碍和物件，再进入手动编辑。</p>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="cols">宽（格）</label>
+            <input id="cols" type="number" min="8" max="128" value="48" />
+          </div>
+          <div class="field">
+            <label for="rows">高（格）</label>
+            <input id="rows" type="number" min="8" max="128" value="48" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="assembleMode">地形布局</label>
+          <select id="assembleMode">
+            <option value="auto">跟随提示词（默认河流）</option>
+            <option value="river">河流与道路</option>
+            <option value="lake">湖泊与小径</option>
+            <option value="open">开阔地与道路</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="variation">地砖变化度 <span class="val" id="variationVal">0.35</span></label>
+          <input id="variation" type="range" min="0" max="1" step="0.05" value="0.35" />
+        </div>
+
+        <label class="check">
+          <input type="checkbox" id="chkSeal" checked />
+          <span>自动封边（四周放岩壁）</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="chkFix" checked />
+          <span>清理无法到达的孤岛</span>
+        </label>
+
+        <button class="btn primary block" id="btnAssemble">开始拼图</button>
+
+        <div class="status-line" id="assembleStatus">等待拼图。</div>
+        <div class="stat-grid" id="assembleStats" hidden>
+          <div><b id="stWalk">0</b><span>可行走</span></div>
+          <div><b id="stBlock">0</b><span>阻挡</span></div>
+          <div><b id="stObj">0</b><span>物件</span></div>
+          <div><b id="stIsland">0</b><span>孤岛</span></div>
+        </div>
+      </section>
+
+      <!-- STEP 4 -->
+      <section class="step-panel" data-panel="4" hidden>
+        <header class="panel-head">
+          <h2>手动调整</h2>
+          <span class="tag">Step 4</span>
+        </header>
+
+        <div class="tool-grid" id="toolbar">
+          <button class="tool active" data-tool="brush" title="画笔 (B)"><span>✎</span>画笔</button>
+          <button class="tool" data-tool="eraser" title="橡皮 (E)"><span>◻</span>橡皮</button>
+          <button class="tool" data-tool="fill" title="填充 (G)"><span>▨</span>填充</button>
+          <button class="tool" data-tool="picker" title="吸管 (I)"><span>⌖</span>吸管</button>
+          <button class="tool" data-tool="rect" title="矩形 (R)"><span>▭</span>矩形</button>
+          <button class="tool" data-tool="collision" title="阻挡 (C)"><span>⊘</span>阻挡</button>
+          <button class="tool" data-tool="object" title="物件 (O)"><span>♣</span>物件</button>
+          <button class="tool" data-tool="pan" title="平移 (空格)"><span>✥</span>平移</button>
+        </div>
+
+        <div class="layer-toggles">
+          <label class="check"><input type="checkbox" id="showBack" checked /><span>地面层</span></label>
+          <label class="check"><input type="checkbox" id="showObj" checked /><span>物件层</span></label>
+          <label class="check"><input type="checkbox" id="showCollision" /><span>阻挡</span></label>
+          <label class="check"><input type="checkbox" id="showGrid" checked /><span>网格</span></label>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn mini" id="btnUndo">撤销 Ctrl+Z</button>
+          <button class="btn mini" id="btnRedo">重做 Ctrl+Y</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="mapName">地图名</label>
+            <input id="mapName" type="text" value="新地图" />
+          </div>
+          <div class="field narrow">
+            <label for="mapIndex">编号</label>
+            <input id="mapIndex" type="number" value="0" />
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn mini" id="btnClear">清空地图</button>
+          <button class="btn mini" id="btnFillTile">铺满当前砖</button>
+        </div>
+
+        <div class="divider"></div>
+        <h3 class="sub-title">导出</h3>
+        <div class="btn-row">
+          <button class="btn grow" id="btnExportPNG">地图 PNG</button>
+          <button class="btn grow" id="btnExportMap">导出地图 + Lib</button>
+        </div>
+        <div class="field-row">
+          <label for="tileLibIndex">Tiles 编号</label>
+          <input id="tileLibIndex" type="number" min="0" max="99" value="0" />
+        </div>
+        <div class="field-row">
+          <label for="objectLibIndex">Objects 编号</label>
+          <input id="objectLibIndex" type="number" min="2" max="99" value="2" />
+        </div>
+        <button class="btn block" id="btnExportAtlas">导出素材图集（PNG + JSON）</button>
+      </section>
+    </aside>
+
+    <!-- ================= 中间画布 ================= -->
+    <section class="stage">
+      <div class="stage-head">
+        <div class="stage-title" id="stageTitle">图集预览</div>
+        <div class="stage-tools">
+          <button class="btn mini" id="btnViewTiles">地砖图集</button>
+          <button class="btn mini" id="btnViewObjects">前景图集</button>
+          <span class="chip" id="stageBadge">无图</span>
+          <button class="icon-btn" id="btnZoomOut" title="缩小">−</button>
+          <button class="icon-btn" id="btnZoomFit" title="适配窗口">⤢</button>
+          <button class="icon-btn" id="btnZoomIn" title="放大">＋</button>
+        </div>
+      </div>
+      <div class="canvas-host" id="canvasHost">
+        <canvas id="view"></canvas>
+        <div class="canvas-hint" id="canvasHint">
+          <div class="hint-inner">
+            <b>还没有内容</b>
+            <span>先在左侧生成或上传地砖图集与前景图集</span>
+          </div>
+        </div>
+        <div class="loading" id="loading" hidden><div class="spinner"></div><span id="loadingText">处理中…</span></div>
+      </div>
+      <div class="stage-foot">
+        <span id="footNote">滚轮缩放 · 拖拽平移 · 空格临时平移</span>
+        <span class="zoom-label" id="zoomLabel">100%</span>
+      </div>
+    </section>
+
+    <!-- ================= 右侧素材库 ================= -->
+    <aside class="panel-right">
+      <div class="tabs">
+        <button class="tab active" data-tab="tiles">地砖 <em id="tileCount">0</em></button>
+        <button class="tab" data-tab="objects">物件 <em id="objCount">0</em></button>
+      </div>
+
+      <div class="tab-body" data-tab-body="tiles">
+        <div class="asset-grid" id="tileList"></div>
+        <div class="asset-actions">
+          <button class="btn mini block" id="btnImportTiles">导入图片为地砖</button>
+          <input type="file" id="tileFile" accept="image/*" multiple hidden />
+          <p class="hint">整张图会按 64px 网格切片并加入素材库。</p>
+        </div>
+      </div>
+
+      <div class="tab-body" data-tab-body="objects" hidden>
+        <div class="asset-grid objects" id="objList"></div>
+        <div class="asset-actions">
+          <button class="btn mini block" id="btnImportObject">导入物件（透明 PNG）</button>
+          <input type="file" id="objFile" accept="image/*" multiple hidden />
+          <p class="hint">物件按单元格宽度换算尺寸，锚点在底部中心。</p>
+        </div>
+      </div>
+
+      <div class="selection-card" id="selectionCard">
+        <div class="sel-empty">未选中素材</div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="stCoord">格子 —</span>
+    <span id="stTool">工具：画笔</span>
+    <span id="stTileName">地砖：—</span>
+    <span id="stSize">地图：—</span>
+    <span class="spacer"></span>
+    <span class="muted">MapGenerator Web · 兼容 V100 .map</span>
+  </footer>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <header>
+      <h2 id="modalTitle">使用说明</h2>
+      <button class="icon-btn" id="modalClose">×</button>
+    </header>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<input type="file" id="projectFile" accept=".json,application/json" hidden />
+
+<script src="js/util.js"></script>
+<script src="js/store.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/atlas.js"></script>
+<script src="js/demo.js"></script>
+<script src="js/analyze.js"></script>
+<script src="js/assemble.js"></script>
+<script src="js/terrain.js"></script>
+<script src="js/render.js"></script>
+<script src="js/editor.js"></script>
+<script src="js/exporters.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
