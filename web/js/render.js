@@ -122,20 +122,22 @@
 
       // 网格提示（按目标格数）
       if (opts.cols && opts.rows && z > 0.12) {
+        const bounds = opts.sheetBounds || { x: 0, y: 0, w: 1, h: 1 };
+        const gridX = x + bounds.x * w, gridY = y + bounds.y * h, gridW = bounds.w * w, gridH = bounds.h * h;
         ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,0.35)";
         ctx.lineWidth = 1;
         for (let i = 1; i < opts.cols; i++) {
-          const gx = x + (w / opts.cols) * i;
-          ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx, y + h); ctx.stroke();
+          const gx = gridX + (gridW / opts.cols) * i;
+          ctx.beginPath(); ctx.moveTo(gx, gridY); ctx.lineTo(gx, gridY + gridH); ctx.stroke();
         }
         for (let j = 1; j < opts.rows; j++) {
-          const gy = y + (h / opts.rows) * j;
-          ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke();
+          const gy = gridY + (gridH / opts.rows) * j;
+          ctx.beginPath(); ctx.moveTo(gridX, gy); ctx.lineTo(gridX + gridW, gy); ctx.stroke();
         }
         ctx.strokeStyle = "rgba(255,255,255,0.85)";
         ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, w, h);
+        ctx.strokeRect(gridX, gridY, gridW, gridH);
         ctx.restore();
       }
       return;
@@ -156,6 +158,7 @@
   R.terrainImage = function (p, x, y, kinds) {
     const i = y * p.cols + x, tile = p.tiles[p.back[i]];
     if (!tile || !tile.canvas) return null;
+    kinds = kinds || R.terrainKinds(p);
     const cacheValues = [];
     for (let yy = Math.max(0, y - 1); yy <= Math.min(p.rows - 1, y + 1); yy++)
       for (let xx = Math.max(0, x - 1); xx <= Math.min(p.cols - 1, x + 1); xx++) {
@@ -166,40 +169,105 @@
     p._terrainCache = p._terrainCache || new Map();
     const cached = p._terrainCache.get(i);
     if (cached && cached.key === cacheKey) return cached.image;
-    kinds = kinds || Array.from(p.back, (index) => { const t = p.tiles[index]; return t ? (t.kind || (t.walk === false ? "wall" : "floor")) : "floor"; });
     const order = ["water", "path", "wall", "wall_low"];
     const neighbors = [];
     for (let yy = Math.max(0, y - 1); yy <= Math.min(p.rows - 1, y + 1); yy++) for (let xx = Math.max(0, x - 1); xx <= Math.min(p.cols - 1, x + 1); xx++) neighbors.push(p.tiles[p.back[yy * p.cols + xx]]);
-    const layers = order.filter((candidate) => neighbors.some((neighbor) => neighbor && (neighbor.kind || (neighbor.walk === false ? "wall" : "floor")) === candidate));
-    const hasFloor = neighbors.some((neighbor) => neighbor && (neighbor.kind || (neighbor.walk === false ? "wall" : "floor")) === "floor");
-    const baseTile = hasFloor ? neighbors.find((neighbor) => neighbor && (neighbor.kind || (neighbor.walk === false ? "wall" : "floor")) === "floor") : tile;
-    const output = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), ctx = U.ctx(output);
-    ctx.drawImage(baseTile.canvas, 0, 0, R.CELL_WIDTH, R.CELL_HEIGHT);
-    for (const layerKind of layers) {
-      const candidates = neighbors.filter((candidate) => candidate && (candidate.kind || (candidate.walk === false ? "wall" : "floor")) === layerKind);
-      const source = candidates[0];
-      if (!source || !source.canvas) continue;
-      const layer = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), lctx = U.ctx(layer);
-      lctx.drawImage(source.canvas, 0, 0, R.CELL_WIDTH, R.CELL_HEIGHT);
-      const maskCanvas = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), mctx = U.ctx(maskCanvas);
-      const mask = mctx.createImageData(R.CELL_WIDTH, R.CELL_HEIGHT);
-      const coverage = MG.Terrain.coverageGrid(kinds, p.cols, p.rows, x, y, layerKind);
-      for (let py = 0; py < R.CELL_HEIGHT; py++) for (let px = 0; px < R.CELL_WIDTH; px++) {
-        const alpha = Math.round(255 * MG.Terrain.sampleCoverage(coverage, px / (R.CELL_WIDTH - 1), py / (R.CELL_HEIGHT - 1)));
-        const q = (py * R.CELL_WIDTH + px) * 4;
-        mask.data[q] = mask.data[q + 1] = mask.data[q + 2] = mask.data[q + 3] = alpha;
+    const sources = p._terrainSources;
+    if (sources?.directional) {
+      const region = new Set(neighbors.filter(Boolean).map((t) => t.kind || "floor").filter((kind) => kind !== "floor"));
+      const kind = tile.kind || "floor", floor = sources.bases.floor;
+      if (floor && region.size <= 1 && neighbors.every(Boolean)) {
+        const output = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), ctx = U.ctx(output);
+        if (kind === "floor") ctx.drawImage(tile.canvas, 0, 0, output.width, output.height);
+        else if (["water", "path", "wall"].includes(kind)) {
+          const mask = MG.TileRules.maskAt(kinds, p.cols, p.rows, x, y, kind);
+          const base = tile.role === "transition" ? sources.bases[kind] : tile;
+          const frame = sources.frames.get(kind + ":" + mask);
+          if (mask === 255) ctx.drawImage(base.canvas, 0, 0, output.width, output.height);
+          else if (frame) ctx.drawImage(frame.canvas, 0, 0, output.width, output.height);
+          else {
+            ctx.drawImage(floor.canvas, 0, 0, output.width, output.height);
+            blendTerrain(ctx, base, MG.TileRules.coverage(mask));
+          }
+        } else return fallbackTerrain();
+        return remember(output);
       }
-      mctx.putImageData(mask, 0, 0);
-      lctx.globalCompositeOperation = "destination-in";
-      lctx.drawImage(maskCanvas, 0, 0);
-      lctx.globalCompositeOperation = "source-over";
-      ctx.drawImage(layer, 0, 0);
     }
-    if (p._terrainCache.size < 4096 || p._terrainCache.has(i)) p._terrainCache.set(i, { key: cacheKey, image: output });
-    return output;
+    return fallbackTerrain();
+
+    function fallbackTerrain() {
+      const layers = order.filter((candidate) => neighbors.some((neighbor) => neighbor && (neighbor.kind || (neighbor.walk === false ? "wall" : "floor")) === candidate));
+      const nearbyFloor = neighbors.find((neighbor) => neighbor && (neighbor.kind || (neighbor.walk === false ? "wall" : "floor")) === "floor");
+      const baseTile = sources?.directional ? sources.bases.floor : tile.kind === "floor" ? tile : nearbyFloor || tile;
+      const output = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), ctx = U.ctx(output);
+      ctx.drawImage(baseTile.canvas, 0, 0, R.CELL_WIDTH, R.CELL_HEIGHT);
+      for (const layerKind of layers) {
+        const candidates = neighbors.filter((candidate) => candidate && (candidate.kind || (candidate.walk === false ? "wall" : "floor")) === layerKind);
+        const source = tile.kind === layerKind && tile.role !== "transition" ? tile : candidates.find((t) => t.role !== "transition") || sources?.bases[layerKind] || candidates[0];
+        if (!source || !source.canvas) continue;
+        const coverage = sources?.directional ? MG.TileRules.junctionCoverage(kinds, p.cols, p.rows, x, y, layerKind) : MG.Terrain.coverageGrid(kinds, p.cols, p.rows, x, y, layerKind);
+        blendTerrain(ctx, source, coverage);
+      }
+      return remember(output);
+    }
+
+    function remember(output) {
+      if (sources?.directional) constrainBoundary(output, p, x, y, kinds, sources);
+      if (p._terrainCache.size < 4096 || p._terrainCache.has(i)) p._terrainCache.set(i, { key: cacheKey, image: output });
+      return output;
+    }
   };
 
+  function constrainBoundary(canvas, project, x, y, kinds, sources) {
+    const ctx = U.ctx(canvas), w = canvas.width, h = canvas.height, image = ctx.getImageData(0, 0, w, h);
+    const layers = ["water", "path", "wall", "wall_low"].filter((kind) => sources.pixels[kind]);
+    const coverages = layers.map((kind) => MG.TileRules.junctionCoverage(kinds, project.cols, project.rows, x, y, kind));
+    for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+      if (px !== 0 && py !== 0 && px !== w - 1 && py !== h - 1) continue;
+      const index = (py * w + px) * 4;
+      const color = Array.from(sources.pixels.floor.slice(index, index + 3));
+      layers.forEach((kind, n) => {
+        const alpha = MG.Terrain.sampleCoverage(coverages[n], px / (w - 1), py / (h - 1));
+        for (let c = 0; c < 3; c++) color[c] = Math.round(color[c] * (1 - alpha) + sources.pixels[kind][index + c] * alpha);
+      });
+      image.data.set(color, index); image.data[index + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+
+  function blendTerrain(ctx, source, coverage) {
+    const layer = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), lctx = U.ctx(layer);
+    lctx.drawImage(source.canvas, 0, 0, R.CELL_WIDTH, R.CELL_HEIGHT);
+    const maskCanvas = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), mctx = U.ctx(maskCanvas);
+    const mask = mctx.createImageData(R.CELL_WIDTH, R.CELL_HEIGHT);
+    for (let py = 0; py < R.CELL_HEIGHT; py++) for (let px = 0; px < R.CELL_WIDTH; px++) {
+      const alpha = Math.round(255 * MG.Terrain.sampleCoverage(coverage, px / (R.CELL_WIDTH - 1), py / (R.CELL_HEIGHT - 1)));
+      const q = (py * R.CELL_WIDTH + px) * 4;
+      mask.data[q] = mask.data[q + 1] = mask.data[q + 2] = mask.data[q + 3] = alpha;
+    }
+    mctx.putImageData(mask, 0, 0);
+    lctx.globalCompositeOperation = "destination-in"; lctx.drawImage(maskCanvas, 0, 0);
+    ctx.drawImage(layer, 0, 0);
+  }
+
   R.terrainKinds = function (p) {
+    const signature = p.tiles.map((t) => [t.id, t.kind, t.role, t.mask, t.backgroundKind].join(":")).join(";");
+    if (p._terrainSources?.signature !== signature) {
+      const bases = {}, frames = new Map();
+      p.tiles.forEach((tile) => {
+        if (tile.role === "transition" && tile.backgroundKind === "floor") frames.set(tile.kind + ":" + tile.mask, tile);
+        else if (!bases[tile.kind]) bases[tile.kind] = tile;
+      });
+      const directional = frames.size > 0 && !!bases.floor && Array.from(frames.values()).every((frame) => bases[frame.kind]);
+      const pixels = {};
+      if (directional) Object.entries(bases).forEach(([kind, tile]) => {
+        const canvas = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), ctx = U.ctx(canvas);
+        ctx.drawImage(tile.canvas, 0, 0, canvas.width, canvas.height);
+        pixels[kind] = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      });
+      p._terrainSources = { signature, bases, frames, directional, pixels };
+      p._terrainCache = new Map();
+    }
     return Array.from(p.back, (index) => { const t = p.tiles[index]; return t ? (t.kind || (t.walk === false ? "wall" : "floor")) : "floor"; });
   };
 

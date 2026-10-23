@@ -49,12 +49,35 @@
         tiles.push({ index: y * 4 + x, row: y, col: x, name: row[0] + " " + (x + 1), kind: row[1], walk: row[2] });
       }
     });
+    const dense = opts.tilePixels != null;
+    let sheet = { cols: 4, rows: 4, slots: tiles };
+    if (dense) {
+      const tilePixels = Number(opts.tilePixels), sheetSize = Number(opts.sheetSize || 1024);
+      if (!Number.isInteger(tilePixels) || tilePixels < 32 || tilePixels > 512 || !Number.isInteger(sheetSize) || sheetSize < 512 || sheetSize > 2048)
+        throw new Error("图集或地砖尺寸无效：地砖需为 32–512 像素，图集需为 512–2048 像素");
+      const side = Math.floor(sheetSize / tilePixels), capacity = side * side;
+      if (capacity < 4) throw new Error("地砖尺寸过大，图集至少需要容纳四种基础材质");
+      const transitionCount = Math.min(capacity - Math.max(4, Math.round(capacity * 0.4)), 138);
+      const baseCount = capacity - transitionCount, slots = [];
+      const add = (data) => { const index = slots.length; slots.push({ ...data, index, row: Math.floor(index / side), col: index % side }); };
+      rows.forEach((row, k) => {
+        const count = Math.floor(baseCount / 4) + (k < baseCount % 4 ? 1 : 0);
+        for (let v = 0; v < count; v++) add({ name: row[0] + " " + (v + 1), kind: row[1], walk: row[2], role: "base", variant: v });
+      });
+      ["wall", "water", "path"].forEach((kind, k) => {
+        const row = rows.find((r) => r[1] === kind);
+        const count = Math.floor(transitionCount / 3) + (k < transitionCount % 3 ? 1 : 0);
+        MG.TileRules.MASKS.slice(0, count).forEach((mask) => add({ name: row[0] + " 边缘 " + mask, kind, walk: row[2], role: "transition", mask, backgroundKind: "floor" }));
+      });
+      sheet = { cols: side, rows: side, slots, tilePixels, sheetSize,
+        offsetX: Math.floor((sheetSize - side * tilePixels) / 2), offsetY: Math.floor((sheetSize - side * tilePixels) / 2) };
+    }
     return {
-      version: 1,
+      version: dense ? 2 : 1,
       biome,
       prompt: String(opts.prompt || "").trim(),
       seed: Number.isFinite(Number(opts.seed)) ? Number(opts.seed) : 1,
-      tiles: { cols: 4, rows: 4, slots: tiles },
+      tiles: sheet,
       objects: {
         cols: 4,
         rows: 2,
@@ -82,6 +105,7 @@
         "keep every object fully inside its cell, and do not let objects touch neighboring cells. " +
         "Cell order: " + names + ". Do not add text, labels, borders, grid lines, shadows outside the object, or extra objects.";
     }
+    if (plan.version >= 2) return densePrompt(plan, style);
     const rows = [];
     for (let y = 0; y < plan.tiles.rows; y++) {
       const row = plan.tiles.slots.filter((s) => s.row === y)[0];
@@ -105,6 +129,33 @@
       "Keep the same texture scale, palette and diffuse illumination across the atlas. Preserve the fixed oblique art direction without rotating or mirroring variations. " +
       "Use no objects, cast shadows, directional highlights, raised rims or transparent holes; do not add text, labels, borders, grid lines, or blank margins.";
   };
+
+  function densePrompt(plan, style) {
+    const grid = plan.tiles;
+    const entries = grid.slots.map((slot) => "R" + (slot.row + 1) + "C" + (slot.col + 1) + " " + slot.kind + ": " +
+      (slot.role === "base" ? "full material variation " + (slot.variant + 1) : MG.TileRules.describe(slot.mask)));
+    return style + ". Create one " + grid.sheetSize + "x" + grid.sheetSize + " terrain atlas: " + grid.cols + " columns by " + grid.rows +
+      " rows, exactly " + grid.slots.length + " square slots of " + grid.tilePixels + "x" + grid.tilePixels + " pixels. " +
+      "Start the content at x=" + grid.offsetX + ", y=" + grid.offsetY + "; leave " + grid.offsetX + " pixels of unused outer margin on the left/top and the remaining margin on the right/bottom. No gutters between slots. " +
+      "Read left-to-right then top-to-bottom. The slot manifest is mandatory; theme details may style materials but may not change slot positions.\n\n" +
+      "Extraction: use the centered 3:2 rectangular game-ground crop inside every square: x=0–100%, y=16.6667–83.3333%. " +
+      "All connection geometry must fit this usable crop; extend artwork into the unused top/bottom without crop lines. Never draw floating diamond tiles.\n\n" +
+      "Topology: N=top, NE=top-right, E=right, SE=bottom-right, S=bottom, SW=bottom-left, W=left, NW=top-left in IMAGE coordinates. " +
+      "Each transition has its assigned material at the cell CENTER and the biome floor material in its exposed areas. A named neighbor is connected to the same material; all unnamed neighbors are floor. " +
+      "A missing cardinal exposes a straight border toward floor. A connected pair of cardinals with its diagonal missing forms a concave INNER corner; do not replace it with a convex outer corner. " +
+      "At each usable edge midpoint, use the target material only when that cardinal is connected; otherwise use floor. At a usable corner, use the target material only when both adjacent cardinals AND their diagonal connect; otherwise use floor. " +
+      "Preserve connected endpoints, isolated islands, end caps and one-cell-wide strips. Diagonals connect only when both adjacent cardinals connect.\n\n" +
+      "Art roles: base slots are full-coverage, seamless plain material with no prepainted shores, roads or cliff silhouettes. " +
+      "Wall transition slots depict continuous rock/cliff faces facing ONLY the exposed floor sides, with connected cliff tops, convex outer and concave inner corners; no separate boulders or upright buildings. " +
+      "Water transition slots depict a natural shoreline with thin wet soil and restrained foam strictly inside the exposed side; connected water edges have no shore. " +
+      "Path transition slots depict a continuous road verge with compact soil/gravel and grass contact, preserving the specified entrances and junctions. " +
+      "All exposed backgrounds use the SAME floor texture as the base floor slots, never magenta or transparent holes.\n\n" +
+      "Seams: compatible edge profiles and corner patches must match in color, texture phase and scale; any base variation must connect with any other of that material. " +
+      "Keep the outer 8% compatibility bands consistent by edge topology; a material edge and a floor edge must remain distinct. " +
+      "Use one fixed light direction, low contrast diffuse light and constant cliff height. Keep cliff faces and shoreline detail inside their assigned crop; no cast shadows into adjacent cells. " +
+      "No arbitrary rotation or mirroring: orientation is fixed by each manifest entry. Do not add text, labels, grid lines, tile frames, characters or props.\n\n" +
+      "Slot manifest (identifiers are instructions, never printed on the image):\n" + entries.join("\n");
+  }
 
   function crop(source, sx, sy, sw, sh) {
     const out = U.mkCanvas(Math.max(1, Math.round(sw)), Math.max(1, Math.round(sh)));
@@ -179,8 +230,11 @@
 
   function cell(source, index, grid, inset) {
     const col = index % grid.cols, row = Math.floor(index / grid.cols);
-    const x0 = Math.floor(col * source.width / grid.cols), x1 = Math.floor((col + 1) * source.width / grid.cols);
-    const y0 = Math.floor(row * source.height / grid.rows), y1 = Math.floor((row + 1) * source.height / grid.rows);
+    const dense = grid.tilePixels && grid.sheetSize;
+    const x0 = Math.floor(dense ? (grid.offsetX + col * grid.tilePixels) * source.width / grid.sheetSize : col * source.width / grid.cols);
+    const x1 = Math.floor(dense ? (grid.offsetX + (col + 1) * grid.tilePixels) * source.width / grid.sheetSize : (col + 1) * source.width / grid.cols);
+    const y0 = Math.floor(dense ? (grid.offsetY + row * grid.tilePixels) * source.height / grid.sheetSize : row * source.height / grid.rows);
+    const y1 = Math.floor(dense ? (grid.offsetY + (row + 1) * grid.tilePixels) * source.height / grid.sheetSize : (row + 1) * source.height / grid.rows);
     const pad = Math.floor(Math.min(x1 - x0, y1 - y0) * inset / 100);
     return crop(source, x0 + pad, y0 + pad, x1 - x0 - 2 * pad, y1 - y0 - 2 * pad);
   }
@@ -198,15 +252,15 @@
   function harmonizeEdges(tiles) {
     const size = 8;
     const kinds = new Map();
-    tiles.forEach((tile) => { if (!kinds.has(tile.kind)) kinds.set(tile.kind, []); kinds.get(tile.kind).push(tile); });
+    tiles.filter((tile) => tile.role !== "transition").forEach((tile) => { if (!kinds.has(tile.kind)) kinds.set(tile.kind, []); kinds.get(tile.kind).push(tile); });
     for (const variants of kinds.values()) {
-      if (variants.length < 2) continue;
+      if (!variants.length) continue;
       const first = variants[0].canvas, fw = first.width, fh = first.height;
       const source = U.ctx(first).getImageData(0, 0, fw, fh).data;
       const horizontal = new Uint8ClampedArray(source);
       const smooth = (n) => { const t = U.clamp(n / size, 0, 1); return t * t * (3 - 2 * t); };
       for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
-        const p = (y * fw + x) * 4, blend = 1 - smooth(Math.min(x, fw - 1 - x));
+        const p = (y * fw + x) * 4, distance = Math.min(x, fw - 1 - x), blend = distance <= 1 ? 1 : 1 - smooth(distance);
         for (let c = 0; c < 3; c++) {
           const edge = (source[(y * fw) * 4 + c] + source[(y * fw + fw - 1) * 4 + c]) / 2;
           horizontal[p + c] = source[p + c] * (1 - blend) + edge * blend;
@@ -214,7 +268,7 @@
       }
       const shared = new Uint8ClampedArray(horizontal);
       for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
-        const p = (y * fw + x) * 4, blend = 1 - smooth(Math.min(y, fh - 1 - y));
+        const p = (y * fw + x) * 4, distance = Math.min(y, fh - 1 - y), blend = distance <= 1 ? 1 : 1 - smooth(distance);
         for (let c = 0; c < 3; c++) {
           const edge = (horizontal[x * 4 + c] + horizontal[((fh - 1) * fw + x) * 4 + c]) / 2;
           shared[p + c] = horizontal[p + c] * (1 - blend) + edge * blend;
@@ -233,6 +287,28 @@
         tile.color = averageColor(tile.canvas);
       }
     }
+    // Keep topology-specific boundaries. Applying a material-wide edge to these
+    // frames would erase shorelines and the direction of cliff faces.
+    for (const tile of tiles.filter((t) => t.role === "transition")) {
+      const floor = kinds.get(tile.backgroundKind)?.[0], target = kinds.get(tile.kind)?.[0];
+      if (!floor || !target) continue;
+      const canvas = tile.canvas, w = canvas.width, h = canvas.height, ctx = U.ctx(canvas);
+      const image = ctx.getImageData(0, 0, w, h), floorPixels = U.ctx(floor.canvas).getImageData(0, 0, w, h).data;
+      const targetPixels = U.ctx(target.canvas).getImageData(0, 0, w, h).data, coverage = MG.TileRules.coverage(tile.mask);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const distance = Math.min(x, w - 1 - x, y, h - 1 - y);
+        if (distance >= 5) continue;
+        const blend = distance <= 1 ? 1 : (5 - distance) / 4;
+        const alpha = MG.Terrain.sampleCoverage(coverage, x / (w - 1), y / (h - 1)), p = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const shared = floorPixels[p + c] * (1 - alpha) + targetPixels[p + c] * alpha;
+          image.data[p + c] = Math.round(image.data[p + c] * (1 - blend) + shared * blend);
+        }
+        image.data[p + 3] = 255;
+      }
+      ctx.putImageData(image, 0, 0);
+      tile.src = U.dataURLFromCanvas(canvas); tile.color = averageColor(canvas);
+    }
   }
 
   Atlas.extract = async function (opts) {
@@ -246,6 +322,8 @@
     const warnings = [];
     if (tileImage.width < 32 || tileImage.height < 32 || objectImage.width < 32 || objectImage.height < 16) throw new Error("图集尺寸太小，请上传完整图集");
     if (Math.abs(tileImage.width / tileImage.height - 1) > 0.05) warnings.push("地砖图集不是正方形，请检查切分线");
+    if (plan.version >= 2 && (tileImage.width !== plan.tiles.sheetSize || tileImage.height !== plan.tiles.sheetSize))
+      warnings.push("图集实际尺寸与生成设置不同，已按比例映射槽位；请核对网格");
     for (const slot of plan.tiles.slots) {
       const region = cell(tileImage, slot.index, plan.tiles, inset);
       const canvas = U.mkCanvas(tileWidth, tileHeight);
@@ -288,14 +366,16 @@
 
   Atlas.demo = function (plan, type, size) {
     const side = Math.max(512, Number(size) || 1024);
-    const cols = 4;
-    const rows = type === "objects" ? 2 : 4;
-    const c = U.mkCanvas(side, Math.round(side * rows / 4));
+    const grid = plan[type], cols = grid.cols, rows = grid.rows;
+    const c = U.mkCanvas(side, type === "objects" ? Math.round(side * rows / cols) : side);
     const ctx = U.ctx(c), rng = U.mulberry32(plan.seed + (type === "objects" ? 77 : 13));
     const colors = styleFor(plan.biome);
     for (let i = 0; i < cols * rows; i++) {
-      const x = (i % cols) * c.width / cols, y = Math.floor(i / cols) * c.height / rows;
-      const w = c.width / cols, h = c.height / rows;
+      const slot = grid.slots[i], dense = type === "tiles" && grid.tilePixels;
+      const w = dense ? grid.tilePixels * side / grid.sheetSize : c.width / cols;
+      const h = dense ? w : c.height / rows;
+      const x = dense ? grid.offsetX * side / grid.sheetSize + slot.col * w : (i % cols) * w;
+      const y = dense ? grid.offsetY * side / grid.sheetSize + slot.row * h : Math.floor(i / cols) * h;
       if (type === "objects") {
         ctx.fillStyle = "#ff00ff"; ctx.fillRect(x, y, w, h);
         ctx.fillStyle = colors[i % 4];
@@ -305,8 +385,22 @@
         else if (i % 4 === 2) { ctx.moveTo(x + w * .25, y + h * .75); ctx.lineTo(x + w * .5, y + h * .2); ctx.lineTo(x + w * .78, y + h * .75); ctx.closePath(); ctx.fill(); }
         else { ctx.roundRect(x + w * .25, y + h * .3, w * .5, h * .4, 12); ctx.fill(); }
       } else {
-        ctx.fillStyle = colors[Math.floor(i / 4)]; ctx.fillRect(x, y, w, h);
+        const colorIndex = ["floor", "path", "water", "wall"].indexOf(slot.kind);
+        ctx.fillStyle = colors[colorIndex]; ctx.fillRect(x, y, w, h);
         for (let n = 0; n < 90; n++) { ctx.fillStyle = `rgba(255,255,255,${0.02 + rng() * 0.09})`; ctx.fillRect(x + rng() * w, y + rng() * h, 2 + rng() * 7, 2 + rng() * 7); }
+        if (slot.role === "transition") {
+          const region = U.mkCanvas(Math.round(w), Math.round(h)), rc = U.ctx(region), image = rc.createImageData(region.width, region.height);
+          const base = U.hexToRgb(colors[0]), target = U.hexToRgb(colors[colorIndex]), coverage = MG.TileRules.coverage(slot.mask);
+          for (let py = 0; py < region.height; py++) for (let px = 0; px < region.width; px++) {
+            const u = px / (region.width - 1), v = U.clamp((py - region.height / 6) / (region.height * 2 / 3 - 1), 0, 1);
+            const alpha = MG.Terrain.sampleCoverage(coverage, u, v), p = (py * region.width + px) * 4;
+            const face = slot.kind === "wall" ? Math.max(0, MG.Terrain.sampleCoverage(coverage, u, Math.max(0, v - 0.14)) - alpha) * 55 : 0;
+            const grain = (rng() - 0.5) * 9;
+            ["r", "g", "b"].forEach((channel, k) => { image.data[p + k] = base[channel] * (1 - alpha) + target[channel] * alpha - face + grain; });
+            image.data[p + 3] = 255;
+          }
+          rc.putImageData(image, 0, 0); ctx.drawImage(region, x, y, w, h);
+        }
       }
     }
     return c;
@@ -324,8 +418,8 @@
     let bridgePlaced = false;
     if (!tiles.length) throw new Error("没有地砖，请先提取素材");
     const pools = {};
-    tiles.forEach((t, i) => { (pools[t.kind || "floor"] ||= []).push(i); });
-    const walkable = tiles.map((t, i) => t.walk !== false && t.kind !== "wall" && t.kind !== "water" ? i : -1).filter((i) => i >= 0);
+    tiles.forEach((t, i) => { if (t.role !== "transition") (pools[t.kind || "floor"] ||= []).push(i); });
+    const walkable = tiles.map((t, i) => t.role !== "transition" && t.walk !== false && t.kind !== "wall" && t.kind !== "water" ? i : -1).filter((i) => i >= 0);
     const variation = opts.variation == null ? 0.35 : Number(opts.variation);
     const pickTile = (kind) => {
       const pool = pools[kind] || pools.floor || walkable;

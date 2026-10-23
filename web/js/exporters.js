@@ -163,7 +163,8 @@
       ctx.drawImage(t.canvas, x, y);
       manifest.tiles.push({
         id: t.id, name: t.name, kind: t.kind, walk: t.walk !== false, color: t.color,
-        frame: { x, y, w: tileSize, h: tileSize }, index: i,
+        role: t.role, mask: t.mask, backgroundKind: t.backgroundKind, slotIndex: t.slotIndex,
+        frame: { x, y, w: t.canvas.width, h: t.canvas.height }, index: i,
       });
     });
 

@@ -15,6 +15,7 @@ with sync_playwright() as pw:
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(os.environ.get("ATLAS_TEST_URL", "http://127.0.0.1:5173"), wait_until="networkidle")
+    page.locator("#atlasLayout").select_option("legacy")
     page.locator("#prompt").fill("手绘草原素材，草地、土路、溪流、岩地；松树、灌木、木桥与花丛")
     page.locator("#seed").fill("42")
     for selector, file in [("#fileTileSheet", "tiles.png"), ("#fileObjectSheet", "objects.png")]:

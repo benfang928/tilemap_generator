@@ -83,6 +83,21 @@
           </div>
         </div>
 
+        <div class="field-row">
+          <div class="field">
+            <label for="atlasLayout">地砖图集布局</label>
+            <select id="atlasLayout">
+              <option value="dense">丰富素材 + 方向封边</option>
+              <option value="legacy">旧版 4 × 4（上传旧图集）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="atlasTilePixels">生成地砖槽位大小（px）</label>
+            <input id="atlasTilePixels" type="number" min="32" max="512" step="1" value="96" />
+          </div>
+        </div>
+        <p class="hint" id="atlasCapacity"></p>
+
         <div class="field">
           <label for="seed">随机种子</label>
           <div class="inline">
@@ -105,7 +120,7 @@
         <div class="atlas-upload-grid">
           <label class="dropzone" id="dropTileUpload">
             <input type="file" id="fileTileSheet" accept="image/*" hidden />
-            <strong>上传地砖图集</strong><span>4 × 4 网格</span>
+            <strong>上传地砖图集</strong><span id="tileUploadLayout">按当前地砖布局切分</span>
           </label>
           <label class="dropzone" id="dropObjectUpload">
             <input type="file" id="fileObjectSheet" accept="image/*" hidden />
@@ -117,10 +132,10 @@
           <button type="button" data-atlas="tiles"><span id="tileSheetLabel">地砖图集 · 待生成</span><img id="tileSheetPreview" alt="地砖图集预览" hidden /></button>
           <button type="button" data-atlas="objects"><span id="objectSheetLabel">前景图集 · 待生成</span><img id="objectSheetPreview" alt="前景图集预览" hidden /></button>
         </div>
-        <p class="hint" id="atlasManifest">地砖按行：草地 / 土路 / 水面 / 岩地；每行 4 种变化。前景按从左到右、从上到下排列。</p>
+        <p class="hint" id="atlasManifest"></p>
 
         <div class="status-line" id="conceptStatus">还没有图集，先生成或分别上传两张。</div>
-        <p class="hint">修改主题或地貌后，新图会开始一套素材。替换图集或重新提取会清空旧地图，请先导出需要保留的工程。</p>
+        <p class="hint">尺寸与布局设置用于下次生成或上传；已有图集按保存的布局提取。修改主题或地貌后，新图会开始一套素材。替换图集或重新提取会清空旧地图，请先导出需要保留的工程。</p>
 
         <details class="settings" id="aiSettings">
           <summary>AI 接口设置</summary>
@@ -232,14 +247,15 @@
           <span class="tag">Step 2</span>
         </header>
 
-        <p class="panel-desc">按约定的 4×4 地砖图集和 4×2 前景图集切片；前景使用品红背景抠成透明 PNG。</p>
+        <p class="panel-desc">按图集保存的槽位清单切片，分别保留基础材质和方向过渡；前景图集为 4×2，使用品红背景抠成透明 PNG。</p>
 
         <div class="field-row">
           <div class="field">
             <label for="tileSize">提取地砖尺寸（宽×高）</label>
             <select id="tileSize">
+              <option value="source" selected>按生成槽位尺寸（中心 3:2）</option>
               <option value="48,32">48 × 32 px（单格）</option>
-              <option value="96,64" selected>96 × 64 px（底砖）</option>
+              <option value="96,64">96 × 64 px（底砖）</option>
               <option value="192,128">192 × 128 px（2×源图）</option>
             </select>
           </div>
@@ -473,6 +489,7 @@
 <script src="js/util.js"></script>
 <script src="js/store.js"></script>
 <script src="js/ai.js"></script>
+<script src="js/tile-rules.js"></script>
 <script src="js/atlas.js"></script>
 <script src="js/demo.js"></script>
 <script src="js/analyze.js"></script>

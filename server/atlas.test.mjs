@@ -6,6 +6,8 @@ import vm from "node:vm";
 const source = await readFile(new URL("../web/js/atlas.js", import.meta.url), "utf8");
 const context = vm.createContext({ window: { MG: { U: {} } } });
 vm.runInContext(await readFile(new URL("../web/js/util.js", import.meta.url), "utf8"), context);
+vm.runInContext(await readFile(new URL("../web/js/tile-rules.js", import.meta.url), "utf8"), context);
+vm.runInContext(await readFile(new URL("../web/js/terrain.js", import.meta.url), "utf8"), context);
 vm.runInContext(source, context);
 const Atlas = context.window.MG.Atlas;
 
@@ -31,6 +33,83 @@ test("prompts explicitly describe the two different sheet layouts", () => {
   assert.match(objectPrompt, /4 columns.*2 rows/i);
   assert.match(objectPrompt, /magenta/i);
   assert.notEqual(tilePrompt, objectPrompt);
+});
+
+test("packs one hundred 96-pixel slots into a 1024 atlas with explicit source bounds", () => {
+  const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 42 });
+  assert.equal(plan.version, 2);
+  assert.deepEqual([plan.tiles.cols, plan.tiles.rows, plan.tiles.slots.length], [10, 10, 100]);
+  assert.deepEqual([plan.tiles.offsetX, plan.tiles.offsetY, plan.tiles.tilePixels], [32, 32, 96]);
+  assert.equal(plan.tiles.slots.filter((s) => s.role === "base").length, 40);
+  for (const kind of ["wall", "water", "path"]) {
+    const transitions = plan.tiles.slots.filter((s) => s.role === "transition" && s.kind === kind);
+    assert.equal(transitions.length, 20);
+    assert.equal(new Set(transitions.map((s) => s.mask)).size, 20);
+    assert.ok(transitions.every((s) => s.backgroundKind === "floor"));
+    for (const mask of [0, 1, 4, 16, 64, 17, 68, 7, 28, 112, 193, 31, 124, 199, 241, 253, 247, 223, 127]) {
+      assert.ok(transitions.some((s) => s.mask === mask), kind + " missing common shape " + mask);
+    }
+  }
+  assert.equal(Atlas.plan({ tilePixels: 64, sheetSize: 1024 }).tiles.slots.length, 256);
+  assert.equal(Atlas.plan({ tilePixels: 128, sheetSize: 1024 }).tiles.slots.length, 64);
+  assert.equal(Atlas.plan({ tilePixels: 96, sheetSize: 2048 }).tiles.slots.length, 441);
+  assert.throws(() => Atlas.plan({ tilePixels: 0, sheetSize: 1024 }), /尺寸/);
+});
+
+test("dense prompt specifies exact slots, cliff, shore and road edge directions", () => {
+  const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, biome: "grassland", prompt: "山谷和湖泊" });
+  const prompt = Atlas.prompt(plan, "tiles");
+  assert.match(prompt, /10 columns by 10 rows/);
+  assert.match(prompt, /100.*96.*96/);
+  assert.match(prompt, /32 pixels/);
+  assert.match(prompt, /N=top.*E=right.*S=bottom.*W=left/);
+  assert.match(prompt, /cliff faces/i);
+  assert.match(prompt, /shoreline/i);
+  assert.match(prompt, /road verge/i);
+  assert.match(prompt, /concave/i);
+  assert.match(prompt, /R10C10/);
+  assert.match(prompt, /no.*rotat/i);
+  assert.equal(Atlas.prompt(plan, "objects"), Atlas.prompt(Atlas.plan({ biome: "grassland", prompt: "山谷和湖泊" }), "objects"));
+});
+
+test("dense layouts use base materials rather than randomly placing directional frames", () => {
+  const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 42 });
+  const layout = Atlas.layout({ plan, cols: 24, rows: 24, variation: 1 });
+  assert.ok(Array.from(layout.back).every((index) => plan.tiles.slots[index].role === "base"));
+});
+
+test("normalizes all eight-neighbor combinations into 47 distinct, orientation-preserving states", () => {
+  const rules = context.window.MG.TileRules;
+  const masks = new Set(Array.from({ length: 256 }, (_, mask) => rules.normalize(mask)));
+  assert.equal(masks.size, 47);
+  assert.equal(new Set(rules.MASKS).size, 46);
+  for (const mask of masks) {
+    assert.equal(rules.normalize(mask), mask);
+    assert.equal(context.window.MG.Terrain.sampleCoverage(rules.coverage(mask), 0.5, 0.5), 1);
+    if (mask !== 255) assert.ok(rules.MASKS.includes(mask));
+  }
+  assert.equal(rules.normalize(2 | 8 | 32 | 128), 0, "diagonals alone do not connect");
+  assert.notEqual(rules.normalize(7), rules.normalize(28), "orientation must not be rotated implicitly");
+  assert.equal(rules.maskAt(["wall"], 1, 1, 0, 0, "wall"), 255, "rock extends outside the map border");
+});
+
+test("junction fallbacks share exact boundary samples with authored binary transitions", () => {
+  const rules = context.window.MG.TileRules, sample = context.window.MG.Terrain.sampleCoverage;
+  for (const mask of rules.MASKS.concat(255)) {
+    const grid = Array(9).fill("floor"); grid[4] = "water";
+    const offsets = [1, 2, 5, 8, 7, 6, 3, 0];
+    offsets.forEach((index, bit) => { if (mask & (1 << bit)) grid[index] = "water"; });
+    const junction = rules.junctionCoverage(grid, 3, 3, 1, 1, "water");
+    assert.deepEqual(Array.from(junction), Array.from(rules.coverage(mask)));
+  }
+  const kinds = ["floor", "water", "path", "wall"];
+  for (let state = 0; state < 4096; state++) {
+    const grid = Array.from({ length: 12 }, (_, i) => kinds[((state * 2654435761 + i * 2246822519) >>> (i % 17)) & 3]);
+    for (const kind of kinds.slice(1)) {
+      const a = rules.junctionCoverage(grid, 4, 3, 1, 1, kind), b = rules.junctionCoverage(grid, 4, 3, 2, 1, kind);
+      for (const t of [0, 0.125, 0.5, 0.875, 1]) assert.equal(sample(a, 1, t), sample(b, 0, t));
+    }
+  }
 });
 
 test("same seed creates the same terrain layout", () => {
@@ -125,6 +204,19 @@ test("legacy square-cell projects preserve foreground aspect ratio on the Mir gr
   assert.deepEqual([old.cellSize.width, old.cellSize.height], [48, 32]);
   assert.equal(old.objects[0].spanY, 4.5);
   assert.deepEqual([store.toJSON().cellSize.width, store.toJSON().cellSize.height], [48, 32]);
+});
+
+test("directional tile metadata survives extraction application and project roundtrip", async () => {
+  const store = context.window.MG.Store;
+  store.newProject(8, 8);
+  store.applyAnalysis({ tiles: [{ id: "shore", name: "shore", kind: "water", walk: false,
+    role: "transition", mask: 124, backgroundKind: "floor", index: 57 }], objects: [] });
+  const saved = store.toJSON();
+  assert.deepEqual([saved.tiles[0].role, saved.tiles[0].mask, saved.tiles[0].backgroundKind, saved.tiles[0].slotIndex],
+    ["transition", 124, "floor", 57]);
+  const loaded = await store.fromJSON(saved);
+  assert.deepEqual([loaded.tiles[0].role, loaded.tiles[0].mask, loaded.tiles[0].backgroundKind, loaded.tiles[0].slotIndex],
+    ["transition", 124, "floor", 57]);
 });
 
 test("bridge objects are placed on the crossing instead of scattered on grass", () => {

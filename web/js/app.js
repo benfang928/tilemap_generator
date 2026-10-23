@@ -67,6 +67,8 @@
       overlayCanvas: App.overlayCanvas,
       cols: showSheetGrid ? sheet.cols : null,
       rows: showSheetGrid ? sheet.rows : null,
+      sheetBounds: sheet?.tilePixels ? { x: sheet.offsetX / sheet.sheetSize, y: sheet.offsetY / sheet.sheetSize,
+        w: sheet.cols * sheet.tilePixels / sheet.sheetSize, h: sheet.rows * sheet.tilePixels / sheet.sheetSize } : null,
       showBack: $("#showBack").checked,
       showObj: $("#showObj").checked,
       showCollision: $("#showCollision").checked,
@@ -208,7 +210,8 @@
   App.atlasType = "tiles";
 
   function currentPlan() {
-    return MG.Atlas.plan({ biome: $("#biome").value, prompt: $("#prompt").value, seed: Number($("#seed").value) });
+    return MG.Atlas.plan({ biome: $("#biome").value, prompt: $("#prompt").value, seed: Number($("#seed").value),
+      ...($("#atlasLayout").value === "dense" ? { tilePixels: Number($("#atlasTilePixels").value), sheetSize: Number($("#genSize").value) } : {}) });
   }
 
   function sameTheme(a, b) {
@@ -226,9 +229,24 @@
       $("#" + prefix + "SheetLabel").textContent = (type === "tiles" ? "地砖图集" : "前景图集") + (url ? " · 已就绪" : " · 待生成");
       $('[data-atlas="' + type + '"]').classList.toggle("active", App.atlasType === type);
     }
-    const plan = atlas?.plan || currentPlan();
-    $("#atlasManifest").textContent = "地砖按行：" + plan.tiles.slots.filter((s) => s.col === 0).map((s) => s.name.replace(/ \d+$/, "")).join(" / ") +
-      "，每行 4 种变化。前景顺序：" + plan.objects.slots.map((s) => s.name).join("、") + "。";
+    let proposed;
+    try {
+      proposed = currentPlan();
+      const g = proposed.tiles, bases = g.slots.filter((s) => s.role !== "transition").length;
+      $("#atlasCapacity").textContent = g.cols + " × " + g.rows + " = " + g.slots.length + " 张地砖；基础材质 " + bases +
+        " 张，方向过渡 " + (g.slots.length - bases) + " 张。" + (g.tilePixels ? "槽位 " + g.tilePixels + "×" + g.tilePixels +
+        "，中心可用 " + g.tilePixels + "×" + Math.round(g.tilePixels * 2 / 3) + " 像素；外围留边 " + g.offsetX + " 像素。" : "");
+      $("#tileUploadLayout").textContent = g.cols + " × " + g.rows + " 网格 · " + g.slots.length + " 格";
+    } catch (error) {
+      $("#atlasCapacity").textContent = error.message;
+    }
+    $("#atlasTilePixels").disabled = $("#atlasLayout").value === "legacy";
+    const plan = atlas?.plan || proposed;
+    if (!plan) return;
+    const transitions = plan.tiles.slots.filter((s) => s.role === "transition").length;
+    $("#atlasManifest").textContent = (atlas ? "已有图集：" : "生成清单：") + plan.tiles.cols + "×" + plan.tiles.rows + "，" +
+      plan.tiles.slots.length + " 格，基础 " + (plan.tiles.slots.length - transitions) + " / 岩壁、岸线、路缘 " + transitions +
+      "。前景顺序：" + plan.objects.slots.map((s) => s.name).join("、") + "。";
   }
 
   async function showAtlas(type) {
@@ -241,7 +259,8 @@
     refreshSheetCards();
     if (url) {
       hideHint(); MG.Render.fit("concept");
-      $("#stageBadge").textContent = (type === "tiles" ? "地砖 4×4" : "前景 4×2") + " · " + MG.Render.conceptImg.width + "×" + MG.Render.conceptImg.height;
+      const grid = p.atlas.plan[type];
+      $("#stageBadge").textContent = (type === "tiles" ? "地砖 " : "前景 ") + grid.cols + "×" + grid.rows + " · " + MG.Render.conceptImg.width + "×" + MG.Render.conceptImg.height;
     } else {
       $("#stageBadge").textContent = type === "tiles" ? "等待地砖图集" : "等待前景图集";
       showHint();
@@ -271,6 +290,7 @@
     await U.imgFromURL(url);
     const p = MG.Store.ensure();
     if (!sameTheme(p.atlas?.plan, plan)) p.atlas = { plan, tileURL: null, objectURL: null, extracted: false };
+    if (type === "tiles") p.atlas.plan = plan;
     p.atlas[type === "tiles" ? "tileURL" : "objectURL"] = url;
     p.atlas[type === "tiles" ? "tilePrompt" : "objectPrompt"] = generatedPrompt || "";
     p.biome = plan.biome; p.seed = plan.seed; p.concept = null;
@@ -285,8 +305,10 @@
     if (!cfg.apiKey && cfg.provider !== "sdwebui") {
       $("#aiSettings").open = true; U.toast("先在「AI 接口设置」里填 Key", "err"); return;
     }
-    const plan = currentPlan(), size = $("#genSize").value;
     await runBusy("正在生成素材图集…", async () => {
+      const proposed = currentPlan(), existing = MG.Store.ensure().atlas;
+      const plan = types.length === 1 && types[0] === "objects" && existing?.tileURL && sameTheme(existing.plan, proposed) ? existing.plan : proposed;
+      const size = $("#genSize").value;
       for (const type of types) {
         const name = type === "tiles" ? "地砖" : "前景";
         U.status("#conceptStatus", "正在生成" + name + "图集…", "busy");
@@ -323,7 +345,8 @@
     U.$$("[data-atlas]").forEach((button) => button.addEventListener("click", () => { if (!App.busy) showAtlas(button.dataset.atlas); }));
     $("#btnViewTiles").addEventListener("click", () => { if (!App.busy) showAtlas("tiles"); });
     $("#btnViewObjects").addEventListener("click", () => { if (!App.busy) showAtlas("objects"); });
-    ["biome", "prompt"].forEach((id) => $("#" + id).addEventListener("change", refreshSheetCards));
+    ["biome", "prompt", "genSize", "atlasLayout"].forEach((id) => $("#" + id).addEventListener("change", refreshSheetCards));
+    $("#atlasTilePixels").addEventListener("input", refreshSheetCards);
     refreshSheetCards();
   }
 
@@ -337,7 +360,9 @@
     const p = MG.Store.ensure();
     if (!p.atlas?.tileURL || !p.atlas?.objectURL) { U.toast("先生成或上传地砖图集与前景图集", "err"); setStep(1); return; }
     await runBusy("正在提取地砖与透明前景…", async () => {
-      const [tileWidth, tileHeight] = $("#tileSize").value.split(",").map(Number);
+      const output = $("#tileSize").value;
+      const sourceWidth = p.atlas.plan.tiles.tilePixels || 96;
+      const [tileWidth, tileHeight] = output === "source" ? [sourceWidth, Math.round(sourceWidth * 2 / 3)] : output.split(",").map(Number);
       const settings = { tileWidth, tileHeight, tileSize: tileWidth, inset: Number($("#atlasInset").value), objectTolerance: Number($("#objectTolerance").value) };
       const result = await MG.Atlas.extract(Object.assign({ plan: p.atlas.plan, tileURL: p.atlas.tileURL, objectURL: p.atlas.objectURL }, settings));
       clearExtractedAssets(); MG.Store.applyAnalysis(result); App.analysis = result;
@@ -355,6 +380,11 @@
     $("#biome").value = p.atlas?.plan.biome || p.biome;
     $("#prompt").value = p.atlas?.plan.prompt || p.concept?.prompt || "";
     $("#seed").value = p.seed; $("#cols").value = p.cols; $("#rows").value = p.rows;
+    $("#atlasLayout").value = p.atlas?.plan.version >= 2 ? "dense" : "legacy";
+    if (p.atlas?.plan.tiles.tilePixels) {
+      $("#atlasTilePixels").value = p.atlas.plan.tiles.tilePixels;
+      $("#genSize").value = String(p.atlas.plan.tiles.sheetSize);
+    }
     $("#assembleMode").value = p.atlas?.layout || "auto";
     const assembly = p.atlas?.assembly;
     $("#variation").value = assembly?.variation ?? 0.35;
@@ -365,7 +395,7 @@
     if (settings) {
       const width = settings.tileWidth || settings.tileSize;
       const size = [width, settings.tileHeight || Math.round(width * 2 / 3)].join(",");
-      $("#tileSize").value = Array.from($("#tileSize").options).some((option) => option.value === size) ? size : "96,64";
+      $("#tileSize").value = Array.from($("#tileSize").options).some((option) => option.value === size) ? size : "source";
       $("#atlasInset").value = settings.inset; $("#objectTolerance").value = settings.objectTolerance;
     }
     if (p.atlas) await showAtlas(p.atlas.tileURL ? "tiles" : "objects");
@@ -387,7 +417,7 @@
     p.tiles.slice(0, 12).forEach((t) => {
       const img = document.createElement("img");
       img.src = thumbOf(t.canvas, t.src);
-      img.title = t.name;
+      img.title = t.role === "transition" ? t.name + "；方向素材，绘制后按周围地形自动选取匹配朝向" : t.name;
       box.appendChild(img);
     });
   }
@@ -592,6 +622,7 @@
     }
     p.tiles.forEach((t, i) => {
       const cell = U.el("button", "asset-cell" + (App.selectedTile === i ? " active" : ""));
+      cell.title = t.role === "transition" ? t.name + "；方向素材，绘制后按周围地形自动选取匹配朝向" : t.name;
       const img = document.createElement("img");
       img.src = thumbOf(t.canvas, t.src);
       cell.appendChild(img);
@@ -659,7 +690,8 @@
         ["floor", "path", "water", "wall", "wall_low"].map((k) =>
           '<option value="' + k + '"' + (t.kind === k ? " selected" : "") + ">" + kindName(k) + "</option>"
         ).join("") + "</select>" +
-        '<label class="check"><input type="checkbox" id="tileWalk" ' + (t.walk !== false ? "checked" : "") + '><span>可行走</span></label>';
+        '<label class="check"><input type="checkbox" id="tileWalk" ' + (t.walk !== false ? "checked" : "") + '><span>可行走</span></label>' +
+        (t.role === "transition" ? '<p class="hint">方向封边素材：绘制时设置地形类别，实际朝向由相邻地形自动匹配。</p>' : "");
       $("#tileKind").addEventListener("change", (e) => {
         t.kind = e.target.value;
         t.walk = ["floor", "path"].includes(t.kind);
@@ -854,7 +886,7 @@
     $("#modalBody").innerHTML = `
       <h3>四步流程</h3>
       <ol>
-        <li><b>生成两张图集</b>：输入风格与主题，生成 4×4 地砖图集与 4×2 前景图集；也可分别上传或使用演示双图集。</li>
+        <li><b>生成两张图集</b>：设置地砖槽位大小，按容量生成基础材质和岩壁、岸线、路缘方向素材；前景保持 4×2，也可上传旧版 4×4 地砖图集或使用演示。</li>
         <li><b>提取素材</b>：地砖按固定网格切片，前景按品红背景抠成透明 PNG。显示切分线检查排列；分隔线可用向内裁切去掉，抠图容差可调整。</li>
         <li><b>拼成地图</b>：选择河流、湖泊或开阔布局，按随机种子铺砖、放置前景、封边和清理孤岛。</li>
         <li><b>手动调整</b>：画笔、橡皮、填充、阻挡、物件笔刷，最后导出 PNG 或 V100 <code>.map</code>。</li>

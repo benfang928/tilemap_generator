@@ -91,6 +91,7 @@ with sync_playwright() as pw:
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(URL, wait_until="networkidle")
+    assert "100" in page.locator("#atlasCapacity").inner_text()
     page.locator("#prompt").fill("手绘丘陵草原，松树、溪流与石径")
     page.locator("#seed").fill("42")
     page.locator("#btnGenDemo").click()
@@ -111,7 +112,7 @@ with sync_playwright() as pw:
     materials = page.evaluate("""() => {
       const p=MG.Store.project;
       let edgeMismatch=0,samples=[];
-      for(const kind of ['floor','path','water','wall']){const group=p.tiles.filter(t=>t.kind===kind);if(group.length<2)continue;
+      for(const kind of ['floor','path','water','wall']){const group=p.tiles.filter(t=>t.kind===kind&&t.role!=='transition');if(group.length<2)continue;
         const a=MG.U.ctx(group[0].canvas).getImageData(0,0,96,64).data;
         for(const tile of group.slice(1)){const b=MG.U.ctx(tile.canvas).getImageData(0,0,96,64).data;
           for(let y=0;y<64;y++)for(const x of [0,1,94,95]){const q=(y*96+x)*4;for(let c=0;c<3;c++)if(a[q+c]!==b[q+c]){edgeMismatch++;if(samples.length<4)samples.push({kind,i:tile.slotIndex,x,y,c,a:a[q+c],b:b[q+c]});}}
@@ -122,7 +123,7 @@ with sync_playwright() as pw:
           let clear=0,solid=0;for(let i=3;i<d.length;i+=4){if(!d[i])clear++; if(d[i]>200)solid++;}
           return {clear,solid,ratio:c.width/c.height,spanRatio:o.spanX/o.spanY};})};
     }""")
-    assert materials["tiles"] == 16, materials
+    assert materials["tiles"] == 100, materials
     assert materials["objects"] == 8, materials
     assert all(size == [96, 64] for size in materials["sizes"])
     assert materials["edgeMismatch"] == 0, materials
@@ -144,6 +145,7 @@ with sync_playwright() as pw:
     assemble(page)
     first = page.evaluate("Array.from(MG.Store.project.back)")
     assert page.evaluate("MG.Store.project.front.some(i=>i>=0)")
+    assert page.evaluate("MG.Store.project.back.every(i=>MG.Store.project.tiles[i].role==='base')")
     page.screenshot(path=str(OUT / "03-assembled-map.png"))
     assemble(page)
     assert page.evaluate("Array.from(MG.Store.project.back)") == first
@@ -203,8 +205,9 @@ with sync_playwright() as pw:
     # Odd source dimensions must retain their last row/column and transparent tails.
     odd_export = page.evaluate("""async () => {
       const source=MG.Store.project;
+      const indices=['floor','path','water','wall'].map(kind=>source.tiles.findIndex(t=>t.kind===kind&&t.role==='base'));
       const p={...source,name:'odd-bake',cols:5,rows:3,objects:[],
-        back:Int16Array.from({length:15},(_,i)=>[0,4,8,12][(i+Math.floor(i/5))%4]),
+        back:Int16Array.from({length:15},(_,i)=>indices[(i+Math.floor(i/5))%4]),
         front:new Int16Array(15).fill(-1),collision:Uint8Array.from({length:15},(_,i)=>i%3),_terrainCache:new Map()};
       const ensure=MG.Store.ensure,download=MG.U.download,files=[];
       try {
@@ -229,7 +232,9 @@ with sync_playwright() as pw:
 
     # Use the actual file import UI, then assemble without repeating extraction.
     page.locator("#projectFile").set_input_files(str(OUT / "export.json"))
-    page.wait_for_function("MG.App.step===4 && MG.Store.project.tiles.length===16 && !MG.App.busy")
+    page.wait_for_function("MG.App.step===4 && MG.Store.project.tiles.length===100 && !MG.App.busy")
+    assert page.locator("#atlasTilePixels").input_value() == "96"
+    assert page.locator("#atlasLayout").input_value() == "dense"
     assert page.evaluate("MG.Store.project.objects.map(o=>[o.spanX,o.spanY])") == [list(s) for s in spans]
     assert page.locator("#variation").input_value() == "0.7"
     assert page.locator("#variationVal").inner_text() == "0.70"
@@ -274,14 +279,21 @@ with sync_playwright() as pw:
       const b=await MG.Atlas.extract({...options,objectURL:objects.toDataURL()});
       oc.clearRect(0,0,400,200);oc.fillStyle='#ff00ff';oc.fillRect(0,0,400,200);
       const blank=await MG.Atlas.extract({...options,objectURL:objects.toDataURL()});
+      const densePlan=MG.Atlas.plan({tilePixels:96,sheetSize:1024}),denseSheet=MG.U.mkCanvas(1024,1024),dc=MG.U.ctx(denseSheet);
+      dc.fillStyle='#ff00ff';dc.fillRect(0,0,1024,1024);
+      for(const slot of densePlan.tiles.slots){dc.fillStyle=`rgb(${10+slot.index*2},80,40)`;dc.fillRect(32+slot.col*96,32+slot.row*96,96,96);}
+      const dense=await MG.Atlas.extract({...options,plan:densePlan,tileURL:denseSheet.toDataURL(),tileWidth:96,tileHeight:64});
       return {centers, tileSizes:a.tiles.map(t=>[t.canvas.width,t.canvas.height]), count:a.objects.length, blackCount:b.objects.length,
-        ratios:a.objects.map(o=>o.spanX/o.spanY), blankCount:blank.objects.length, warnings:blank.warnings.length};
+        ratios:a.objects.map(o=>o.spanX/o.spanY), blankCount:blank.objects.length, warnings:blank.warnings.length,
+        denseCenters:dense.tiles.map(t=>Array.from(MG.U.ctx(t.canvas).getImageData(48,32,1,1).data))};
     }""")
     assert fixture["count"] == fixture["blackCount"] == 8, fixture
     assert all(size == [48, 32] for size in fixture["tileSizes"]), fixture
     assert all(c == [20 + i * 12, 80, 40, 255] for i, c in enumerate(fixture["centers"])), fixture
     assert all(abs(r * 1.5 - 44 / 84) < 0.001 for r in fixture["ratios"]), fixture
     assert fixture["blankCount"] == 0 and fixture["warnings"] == 8, fixture
+    assert len(fixture["denseCenters"]) == 100
+    assert all(c == [10 + i * 2, 80, 40, 255] for i, c in enumerate(fixture["denseCenters"])), fixture["denseCenters"]
 
     # Real Canvas coverage checks preserve semantic centers, narrow connections and seams.
     coverage = page.evaluate("""() => {
@@ -350,6 +362,76 @@ with sync_playwright() as pw:
     assert coverage["cases"] == 8 and coverage["centers"] == 200, coverage
     assert coverage["seamPixels"] == 12800 and coverage["cacheRefresh"] and coverage["pngCenters"], coverage
 
+    directional = page.evaluate("""() => {
+      const tiles=MG.Store.project.tiles;
+      const floor=tiles.findIndex(t=>t.kind==='floor'&&t.role==='base');
+      const offsets=[[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
+      let authored=0,fallback=0,interior=0;
+      const board=MG.U.mkCanvas(720,900),bc=MG.U.ctx(board);bc.fillStyle='#20252a';bc.fillRect(0,0,720,900);bc.font='11px sans-serif';
+      for(const [k,kind] of ['wall','water','path'].entries()){
+        const target=tiles.findIndex(t=>t.kind===kind&&t.role==='base');
+        const base=MG.U.mkCanvas(48,32);MG.U.ctx(base).drawImage(tiles[target].canvas,0,0,48,32);
+        const expectedCenter=Array.from(MG.U.ctx(base).getImageData(24,16,1,1).data);
+        const masks=MG.TileRules.MASKS.concat(255);
+        for(const [n,mask] of masks.entries()){
+          const p={cols:3,rows:3,tiles,objects:[],back:new Int16Array(9).fill(floor),front:new Int16Array(9).fill(-1)};
+          p.back[4]=target;offsets.forEach(([dx,dy],bit)=>{if(mask&(1<<bit))p.back[(1+dy)*3+1+dx]=target;});
+          const image=MG.Render.terrainImage(p,1,1),frame=tiles.find(t=>t.kind===kind&&t.role==='transition'&&t.mask===mask);
+          if(frame){
+            const expected=MG.U.mkCanvas(48,32);MG.U.ctx(expected).drawImage(frame.canvas,0,0,48,32);
+            // The outer pixel is standardized after selection to match junction fallbacks.
+            const a=MG.U.ctx(image).getImageData(1,1,46,30).data,b=MG.U.ctx(expected).getImageData(1,1,46,30).data;
+            if(!a.every((v,i)=>v===b[i]))throw new Error(kind+' authored frame not used: '+mask);
+            authored++;
+          }else{
+            const actual=Array.from(MG.U.ctx(image).getImageData(24,16,1,1).data);
+            if(!actual.every((v,i)=>v===expectedCenter[i]))throw new Error(kind+' fallback lost center: '+mask);
+            if(mask===255)interior++;else fallback++;
+          }
+          const x=n%10*72,y=k*300+Math.floor(n/10)*58;
+          bc.drawImage(image,x,y,72,48);bc.fillStyle='#fff';bc.fillText(kind+' '+mask,x+2,y+57);
+        }
+      }
+      return {authored,fallback,interior,image:board.toDataURL()};
+    }""")
+    (OUT / "directional-terrain-cases.png").write_bytes(base64.b64decode(directional.pop("image").split(",", 1)[1]))
+    assert directional == {"authored": 60, "fallback": 78, "interior": 3}, directional
+    dense_seams = page.evaluate("""() => {
+      const tiles=MG.Store.project.tiles,indices=['floor','water','path','wall'].map(kind=>tiles.findIndex(t=>t.kind===kind&&t.role==='base'));
+      let checked=0;
+      for(let scenario=0;scenario<3;scenario++){
+        const back=Int16Array.from({length:64},(_,i)=>indices[scenario===0?(i%8<4?0:1):scenario===1?((i%8+Math.floor(i/8))%3):((i*7+Math.floor(i/8)*3)%4)]);
+        const p={cols:8,rows:8,tiles,back},kinds=MG.Render.terrainKinds(p);
+        const images=Array.from(back,(_,i)=>MG.Render.terrainImage(p,i%8,Math.floor(i/8),kinds));
+        const rgba=images.map(c=>MG.U.ctx(c).getImageData(0,0,48,32).data);
+        for(let y=0;y<8;y++)for(let x=0;x<8;x++){
+          const a=rgba[y*8+x];
+          for(const [dx,dy] of [[1,0],[0,1]]){
+            if(x+dx>=8||y+dy>=8)continue;const b=rgba[(y+dy)*8+x+dx];
+            for(let t=0;t<(dx?32:48);t++){
+              const ai=(dx?t*48+47:31*48+t)*4,bi=(dx?t*48:t)*4;
+              for(let c=0;c<4;c++)if(a[ai+c]!==b[bi+c])throw new Error('dense seam: '+[scenario,x,y,dx,dy,t,c,a[ai+c],b[bi+c]].join(','));
+              checked++;
+            }
+          }
+        }
+      }
+      return checked;
+    }""")
+    assert dense_seams == 13440, dense_seams
+    (OUT / "dense-terrain-prompt.txt").write_text(page.evaluate("MG.Atlas.prompt(MG.Store.project.atlas.plan,'tiles')"), encoding="utf-8")
+    step(page, 1)
+    page.locator("#atlasTilePixels").fill("128")
+    assert "64 张" in page.locator("#atlasCapacity").inner_text()
+    assert page.evaluate("MG.Store.project.atlas.plan.tiles.slots.length") == 100
+    page.locator("#genSize").select_option("2048")
+    assert "256 张" in page.locator("#atlasCapacity").inner_text()
+    page.locator("#atlasLayout").select_option("legacy")
+    assert "16 张" in page.locator("#atlasCapacity").inner_text()
+    page.locator("#atlasLayout").select_option("dense")
+    page.locator("#genSize").select_option("1024")
+    page.locator("#atlasTilePixels").fill("96")
+
     # Simulated provider failure tests the real UI -> AI -> proxy request chain.
     page.evaluate("localStorage.clear()")
     page.reload(wait_until="networkidle")
@@ -373,7 +455,7 @@ with sync_playwright() as pw:
     idle(page)
     assert len(calls) == 2
     assert len(image_downloads) == 1
-    assert "4 columns by 4 rows" in calls[0]["prompt"]
+    assert "10 columns by 10 rows" in calls[0]["prompt"]
     assert "4 columns by 2 rows" in calls[1]["prompt"]
     assert page.evaluate("!!MG.Store.project.atlas.tileURL && !MG.Store.project.atlas.objectURL")
     assert "出错" in page.locator("#conceptStatus").inner_text()
@@ -400,5 +482,47 @@ with sync_playwright() as pw:
     page.wait_for_function("MG.App.step===4 && MG.Store.project.atlas===null")
     assert page.evaluate("Array.from(MG.Store.project.back)") == first
     assert not errors, errors
-    print(json.dumps({"result": "PASS", "materials": {"tiles": 16, "objects": 8}, "pixelFixtures": "PASS", "terrainCoverage": coverage, "bakedTerrain": [baked_export, odd_baked_export], "saveLoad": "PASS", "paintUndoExport": "PASS", "partialFailureRetry": "PASS", "legacyImport": "PASS", "pageErrors": errors}, ensure_ascii=False))
+    # Exercise new-size generation/extraction and legacy uploads through the real UI.
+    size_context = browser.new_context(viewport={"width": 1460, "height": 920})
+    size_page = size_context.new_page()
+    size_page.on("pageerror", lambda error: errors.append(str(error)))
+    size_page.goto(URL, wait_until="networkidle")
+    size_page.locator("#atlasTilePixels").fill("128")
+    size_page.locator("#btnGenDemo").click()
+    idle(size_page)
+    extract(size_page)
+    assert size_page.evaluate("MG.Store.project.tiles.length===64 && MG.Store.project.tiles.every(t=>t.canvas.width===128&&t.canvas.height===85)")
+    size_page.locator("#btnSaveLocal").click()
+    size_page.reload(wait_until="networkidle")
+    size_page.wait_for_function("MG.Store.project.tiles.length===64 && !MG.App.busy")
+    assert size_page.locator("#atlasTilePixels").input_value() == "128"
+    assert size_page.locator("#genSize").input_value() == "1024"
+    step(size_page, 1)
+    size_page.locator("#atlasTilePixels").fill("64")
+    size_page.locator("#btnGenDemo").click()
+    idle(size_page)
+    extract(size_page)
+    assert size_page.evaluate("MG.Store.project.tiles.length===256 && MG.Store.project.tiles.every(t=>t.canvas.width===64&&t.canvas.height===43)")
+    assemble(size_page)
+    assert size_page.evaluate("""() => {const p=MG.Store.project;
+      for(let y=0;y<p.rows;y++)for(let x=0;x<p.cols;x++)if(x===0||y===0||x===p.cols-1||y===p.rows-1)
+        if(p.tiles[p.back[y*p.cols+x]].kind!=='wall'||p.collision[y*p.cols+x]!==1)return false;
+      return p._terrainSources.directional;}""")
+    size_page.locator("#showGrid").uncheck()
+    size_page.screenshot(path=str(OUT / "dense-sealed-map.png"))
+    legacy_tile = size_page.evaluate("MG.Atlas.demo(MG.Atlas.plan({}), 'tiles',1024).toDataURL()")
+    legacy_sheet = OUT / "legacy-tile-sheet.png"
+    legacy_sheet.write_bytes(base64.b64decode(legacy_tile.split(",", 1)[1]))
+    object_url = size_page.evaluate("MG.Store.project.atlas.objectURL")
+    step(size_page, 1)
+    size_page.locator("#atlasLayout").select_option("legacy")
+    size_page.locator("#fileTileSheet").set_input_files(str(legacy_sheet))
+    idle(size_page)
+    assert size_page.evaluate("MG.Store.project.atlas.plan.version") == 1
+    assert size_page.evaluate("MG.Store.project.atlas.objectURL") == object_url
+    extract(size_page)
+    assert size_page.evaluate("MG.Store.project.tiles.length") == 16
+    size_context.close()
+    assert not errors, errors
+    print(json.dumps({"result": "PASS", "materials": {"tiles": 100, "objects": 8}, "pixelFixtures": "PASS", "terrainCoverage": coverage, "directional": directional, "denseSeamPixels": dense_seams, "sizeFlows": [64, 100, 256], "bakedTerrain": [baked_export, odd_baked_export], "saveLoad": "PASS", "paintUndoExport": "PASS", "partialFailureRetry": "PASS", "legacyImport": "PASS", "pageErrors": errors}, ensure_ascii=False))
     browser.close()
