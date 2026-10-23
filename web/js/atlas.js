@@ -87,10 +87,23 @@
       const row = plan.tiles.slots.filter((s) => s.row === y)[0];
       rows.push("row " + (y + 1) + " is " + row.name.replace(/ \d+$/, "") + " (" + row.kind + ")");
     }
-    return style + ". Create exactly one seamless terrain variation in every cell of a 4 columns by 4 rows sheet. " +
-      "Each square sheet cell must contain a centered landscape 3:2 rectangular game-ground crop, with no letterbox bars. " + rows.join(", ") + ". " +
-      "Columns 1-4 are variations of the row terrain. Fill the rectangular crop edge-to-edge, use no objects, no roads crossing cells, " +
-      "do not add text, labels, borders, grid lines, or blank margins. The terrain must have no directional lighting or raised edges, and opposite edges of each landscape crop must tile seamlessly.";
+    return style + ". Create exactly one square terrain atlas with 4 columns by 4 rows of equal square cells, read left-to-right then top-to-bottom. " +
+      rows.join(", ") + ". Columns 1-4 are four compatible variations of that row's material. " +
+      "Use theme details only to style the assigned materials; preserve this layout and the extraction and compatibility rules below.\n\n" +
+      "Extraction: each square sheet cell contains a centered landscape 3:2 rectangular game-ground crop. " +
+      "The usable rectangle spans x=0% to 100% and y=16.6667% to 83.3333% of its cell. " +
+      "Fill the entire cell with its assigned material, including the unused top and bottom extensions; use no letterbox bars or visible crop boundaries. " +
+      "Apply all seam constraints to the usable rectangle, including its top and bottom boundaries inside the square cell.\n\n" +
+      "Compatibility: within each material row, any variation must tile seamlessly with any other variation, including itself, both horizontally and vertically. " +
+      "Share one left/right boundary profile, one top/bottom boundary profile, and compatible corner patches across all four variations. " +
+      "Match boundary colors, brightness, texture phase, grain size and texture direction. All four tiles meeting at a vertex must share a consistent corner appearance. " +
+      "Keep an approximately 8%-deep compatibility band inside each usable edge consistent across that row's variations, retaining natural texture rather than a solid border. " +
+      "Concentrate subtle variation in the interior without a central focal point. Different material rows retain their own distinct boundary textures.\n\n" +
+      "Material roles: these are full-coverage base textures for programmatic terrain transitions. " +
+      "Path rows contain continuous road surface material without road silhouettes, exits or junctions; water rows contain open water without shorelines or islands. " +
+      "Wall or rock row names describe flat surface materials only, without raised walls, cliff faces or terrain transition edges. " +
+      "Keep the same texture scale, palette and diffuse illumination across the atlas. Preserve the fixed oblique art direction without rotating or mirroring variations. " +
+      "Use no objects, cast shadows, directional highlights, raised rims or transparent holes; do not add text, labels, borders, grid lines, or blank margins.";
   };
 
   function crop(source, sx, sy, sw, sh) {

@@ -183,9 +183,9 @@
       lctx.drawImage(source.canvas, 0, 0, R.CELL_WIDTH, R.CELL_HEIGHT);
       const maskCanvas = U.mkCanvas(R.CELL_WIDTH, R.CELL_HEIGHT), mctx = U.ctx(maskCanvas);
       const mask = mctx.createImageData(R.CELL_WIDTH, R.CELL_HEIGHT);
-      const corners = MG.Terrain.cornerCoverages(kinds, p.cols, p.rows, x, y, layerKind);
+      const coverage = MG.Terrain.coverageGrid(kinds, p.cols, p.rows, x, y, layerKind);
       for (let py = 0; py < R.CELL_HEIGHT; py++) for (let px = 0; px < R.CELL_WIDTH; px++) {
-        const alpha = Math.round(255 * MG.Terrain.sampleCoverage(corners, px / (R.CELL_WIDTH - 1), py / (R.CELL_HEIGHT - 1)));
+        const alpha = Math.round(255 * MG.Terrain.sampleCoverage(coverage, px / (R.CELL_WIDTH - 1), py / (R.CELL_HEIGHT - 1)));
         const q = (py * R.CELL_WIDTH + px) * 4;
         mask.data[q] = mask.data[q + 1] = mask.data[q + 2] = mask.data[q + 3] = alpha;
       }
@@ -328,6 +328,17 @@
   };
 
   /* ---------- 导出渲染 ---------- */
+  R.terrainBlock = function (project, x, y, kinds) {
+    const c = U.mkCanvas(R.CELL_WIDTH * 2, R.CELL_HEIGHT * 2), ctx = U.ctx(c);
+    for (let dy = 0; dy < 2 && y + dy < project.rows; dy++) {
+      for (let dx = 0; dx < 2 && x + dx < project.cols; dx++) {
+        const image = R.terrainImage(project, x + dx, y + dy, kinds);
+        if (image) ctx.drawImage(image, dx * R.CELL_WIDTH, dy * R.CELL_HEIGHT);
+      }
+    }
+    return c;
+  };
+
   R.renderToCanvas = function (project, scale) {
     scale = scale || 2;
     const cw = R.CELL_WIDTH * scale, ch = R.CELL_HEIGHT * scale;
@@ -340,7 +351,7 @@
       for (let x = 0; x < project.cols; x++) {
         const ti = project.back[y * project.cols + x];
         const t = project.tiles[ti];
-        if (t && t.canvas) ctx.drawImage(R.terrainImage(project, x, y, terrainKinds), x * cw, y * ch, cw + 0.5, ch + 0.5);
+        if (t && t.canvas) ctx.drawImage(R.terrainImage(project, x, y, terrainKinds), x * cw, y * ch, cw, ch);
         else {
           ctx.fillStyle = "#2a2f2a";
           ctx.fillRect(x * cw, y * ch, cw, ch);

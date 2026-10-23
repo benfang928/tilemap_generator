@@ -374,13 +374,14 @@
           <button class="btn grow" id="btnExportMap">导出地图 + Lib</button>
         </div>
         <div class="field-row">
-          <label for="tileLibIndex">Tiles 编号</label>
-          <input id="tileLibIndex" type="number" min="0" max="99" value="0" />
+          <label for="tileLibIndex">地形素材库号</label>
+          <input id="tileLibIndex" type="number" min="0" max="90" value="0" />
         </div>
         <div class="field-row">
-          <label for="objectLibIndex">Objects 编号</label>
-          <input id="objectLibIndex" type="number" min="2" max="99" value="2" />
+          <label for="objectLibIndex">前景素材库号</label>
+          <input id="objectLibIndex" type="number" min="2" max="90" value="2" />
         </div>
+        <p class="hint">地图 + Lib 导出会在顶部、左侧各补 2 格不可行走边界，内容坐标偏移 +2；宽高补齐为偶数。可用库号为 0–28、90，前景从 2 起，两个库号需不同。默认导出 Tiles.Lib 与 Objects.Lib。</p>
         <button class="btn block" id="btnExportAtlas">导出素材图集（PNG + JSON）</button>
       </section>
     </aside>

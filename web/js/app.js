@@ -531,8 +531,8 @@
     $("#btnExportPNG").addEventListener("click", () => MG.Exporters.png(2));
     $("#btnExportMap").addEventListener("click", async () => {
       try {
-        await MG.Exporters.mapFile();
-        U.toast("已导出地图、Tiles" + $("#tileLibIndex").value + ".Lib 和 Objects" + $("#objectLibIndex").value + ".Lib", "ok");
+        const result = await MG.Exporters.mapFile();
+        U.toast("已导出 " + result.cols + "×" + result.rows + " 地图、" + result.tileFile + " 和 " + result.objectFile, "ok");
       } catch (error) {
         U.toast("导出失败：" + error.message, "err", 4200);
       }

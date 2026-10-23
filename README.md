@@ -1,6 +1,6 @@
 # Tilemap Generator
 
-一个面向 Mir / V100 风格 2D 游戏的地图生成器。它在浏览器中完成图集生成、素材提取、自动拼图和手工编辑，支持将结果导出为地图 PNG、工程文件，以及可直接用于客户端资源流程的 `.map`、`Tiles*.Lib` 和 `Objects*.Lib` 文件。
+一个面向 Mir / V100 风格 2D 游戏的地图生成器。它在浏览器中完成图集生成、素材提取、自动拼图和手工编辑，支持将结果导出为地图 PNG、工程文件，以及 V100 `.map` 和 V3 `.Lib` 素材库。
 
 ## 功能
 
@@ -30,6 +30,26 @@ node server/dev-server.mjs
 
 替换图集或重新提取会清空旧地图和历史记录；重要结果请先导出工程。草稿保存在浏览器 `localStorage`，导出的工程 JSON 可在其他浏览器恢复。
 
+## Mir 地图资源导出
+
+导出会将网页合成后的地形过渡按 2×2 个逻辑格烘焙成 96×64 像素底砖，并复用像素相同的帧；地图索引引用这些合成帧。碰撞仍逐格保存。
+
+已核对的 selfmir 客户端只在正偶数坐标绘制底砖。为保留原图左上角，导出增加两格不可通行的顶部和左侧边界，原坐标 `(x,y)` 对应导出坐标 `(x+2,y+2)`；宽高分别为 `2 + ceil(原尺寸 / 2) * 2`。奇数尺寸的右侧或底部补一格透明、不可通行区域。例如 48×48 工程导出为 50×50 地图，5×3 工程导出为 8×6。编辑中的工程与 PNG 尺寸保持不变，客户端传送点等坐标需要使用导出坐标。
+
+库号对应已核对的 WemadeMir2 `MapLibs` 配置，Lib 文件放入客户端 `Data/Map/WemadeMir2/`：
+
+| 库号 | 文件名 |
+| --- | --- |
+| 0 | `Tiles.Lib` |
+| 1 | `Smtiles.Lib` |
+| 2 | `Objects.Lib` |
+| 3–28 | `Objects2.Lib`–`Objects27.Lib` |
+| 90 | `Objects_32bit.Lib` |
+
+默认导出 `Tiles.Lib`、`Objects.Lib` 和以工程名命名的 `.map`。地形与前景库号必须不同，前景库号需大于等于 2；其他库号会被拒绝。自定义客户端需核对自己的素材库配置。
+
+地面已通过 Lib 解压、地图索引重建与网页逐像素对比；尚未启动游戏客户端验收。前景物件的缩放、锚点、遮挡及变体选择仍需进一步统一，当前验证不代表整张地图在客户端中的显示验收。
+
 ## AI 配置
 
 在页面展开“AI 设置”，填写兼容接口地址、模型和 API Key。Key 仅保存在本机浏览器；开发服务器的 `/proxy` 仅监听 localhost，用于处理浏览器跨域请求。不要把 Key 写入代码、截图或提交记录。未配置 AI 时可使用演示模式和本地上传流程。
@@ -41,7 +61,7 @@ node --test server/ai-image.test.mjs server/atlas.test.mjs server/terrain.test.m
 node server/e2e-smoke.mjs
 ```
 
-第一条命令运行 Node 内置测试。第二条命令需要 Python Playwright 和 Chromium，并且要先启动开发服务器；也可以直接运行 `python server/atlas-smoke.py`。测试截图和导出文件写入 `output/atlas-review/`。
+第一条命令运行 Node 内置测试。第二条命令需要 Python Playwright、Chromium 和 Pillow，并且要先启动开发服务器；也可以直接运行 `python server/atlas-smoke.py`。测试截图和导出文件写入 `output/atlas-review/`。
 
 ## 目录结构
 
