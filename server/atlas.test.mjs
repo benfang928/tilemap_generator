@@ -35,6 +35,21 @@ test("prompts explicitly describe the two different sheet layouts", () => {
   assert.notEqual(tilePrompt, objectPrompt);
 });
 
+test("all atlas prompts request immediate image generation rather than a specification review", () => {
+  const theme = "地下城副本，Q版手绘，墙壁，火炬，骨头";
+  for (const plan of [Atlas.plan({ biome: "cave", prompt: theme }), Atlas.plan({ biome: "cave", prompt: theme, tilePixels: 96, sheetSize: 1024 })]) {
+    for (const type of ["tiles", "objects"]) {
+      const prompt = Atlas.prompt(plan, type);
+      assert.match(prompt, /^Generate the image now\./);
+      assert.match(prompt, /Return only the rendered image/);
+      assert.match(prompt, /from scratch using only the text in this request/);
+      assert.match(prompt, /consistency rules apply within this sheet/);
+      assert.doesNotMatch(prompt, /reference image|previous conversation/i);
+      assert.ok(prompt.includes(theme));
+    }
+  }
+});
+
 test("packs one hundred 96-pixel slots into a 1024 atlas with explicit source bounds", () => {
   const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 42 });
   assert.equal(plan.version, 2);
@@ -59,17 +74,28 @@ test("packs one hundred 96-pixel slots into a 1024 atlas with explicit source bo
 test("dense prompt specifies exact slots, cliff, shore and road edge directions", () => {
   const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, biome: "grassland", prompt: "山谷和湖泊" });
   const prompt = Atlas.prompt(plan, "tiles");
-  assert.match(prompt, /10 columns by 10 rows/);
-  assert.match(prompt, /100.*96.*96/);
-  assert.match(prompt, /32 pixels/);
-  assert.match(prompt, /N=top.*E=right.*S=bottom.*W=left/);
-  assert.match(prompt, /cliff faces/i);
-  assert.match(prompt, /shoreline/i);
-  assert.match(prompt, /road verge/i);
+  assert.match(prompt, /10 columns and 10 rows/);
+  assert.match(prompt, /10 columns and 10 rows of 96px square slots/);
+  assert.match(prompt, /x=32, y=32/);
+  assert.match(prompt, /N, NE, E, SE, S, SW, W, NW/);
+  assert.match(prompt, /rocky cliff edges/i);
+  assert.match(prompt, /natural shores/i);
+  assert.match(prompt, /dirt verges/i);
   assert.match(prompt, /concave/i);
   assert.match(prompt, /R10C10/);
-  assert.match(prompt, /no.*rotat/i);
+  assert.match(prompt, /Identifiers and masks define placement/);
   assert.equal(Atlas.prompt(plan, "objects"), Atlas.prompt(Atlas.plan({ biome: "grassland", prompt: "山谷和湖泊" }), "objects"));
+});
+
+test("dense prompt keeps the topology manifest concise and avoids edit-style reference language", () => {
+  const prompt = Atlas.prompt(Atlas.plan({ tilePixels: 96, sheetSize: 1024, biome: "cave" }), "tiles");
+  assert.ok(prompt.length < 5000, "dense atlas prompt should stay short enough for direct generation");
+  assert.doesNotMatch(prompt, /reference image|previous conversation|preserve the specified/i);
+  assert.match(prompt, /R1C1-R1C10 floor/);
+  assert.match(prompt, /R5C1-R5C10 wall masks/);
+  assert.match(prompt, /R7C1-R7C10 water masks/);
+  assert.match(prompt, /R9C1-R9C10 path masks/);
+  assert.match(prompt, /N, NE, E, SE, S, SW, W, NW/);
 });
 
 test("dense layouts use base materials rather than randomly placing directional frames", () => {

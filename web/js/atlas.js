@@ -96,7 +96,8 @@
   }
 
   Atlas.prompt = function (plan, type) {
-    const style = commonStyle(plan);
+    const style = "Generate the image now. Create a new standalone game atlas from scratch using only the text in this request. " +
+      "All shared textures and consistency rules apply within this sheet. Return only the rendered image. " + commonStyle(plan);
     if (type === "objects") {
       const names = plan.objects.slots.map((s) => s.name).join(", ");
       return style + ". Create exactly one clean sprite in each cell of a 4 columns by 2 rows sprite sheet. " +
@@ -132,29 +133,27 @@
 
   function densePrompt(plan, style) {
     const grid = plan.tiles;
-    const entries = grid.slots.map((slot) => "R" + (slot.row + 1) + "C" + (slot.col + 1) + " " + slot.kind + ": " +
-      (slot.role === "base" ? "full material variation " + (slot.variant + 1) : MG.TileRules.describe(slot.mask)));
-    return style + ". Create one " + grid.sheetSize + "x" + grid.sheetSize + " terrain atlas: " + grid.cols + " columns by " + grid.rows +
-      " rows, exactly " + grid.slots.length + " square slots of " + grid.tilePixels + "x" + grid.tilePixels + " pixels. " +
-      "Start the content at x=" + grid.offsetX + ", y=" + grid.offsetY + "; leave " + grid.offsetX + " pixels of unused outer margin on the left/top and the remaining margin on the right/bottom. No gutters between slots. " +
-      "Read left-to-right then top-to-bottom. The slot manifest is mandatory; theme details may style materials but may not change slot positions.\n\n" +
-      "Extraction: use the centered 3:2 rectangular game-ground crop inside every square: x=0–100%, y=16.6667–83.3333%. " +
-      "All connection geometry must fit this usable crop; extend artwork into the unused top/bottom without crop lines. Never draw floating diamond tiles.\n\n" +
-      "Topology: N=top, NE=top-right, E=right, SE=bottom-right, S=bottom, SW=bottom-left, W=left, NW=top-left in IMAGE coordinates. " +
-      "Each transition has its assigned material at the cell CENTER and the biome floor material in its exposed areas. A named neighbor is connected to the same material; all unnamed neighbors are floor. " +
-      "A missing cardinal exposes a straight border toward floor. A connected pair of cardinals with its diagonal missing forms a concave INNER corner; do not replace it with a convex outer corner. " +
-      "At each usable edge midpoint, use the target material only when that cardinal is connected; otherwise use floor. At a usable corner, use the target material only when both adjacent cardinals AND their diagonal connect; otherwise use floor. " +
-      "Preserve connected endpoints, isolated islands, end caps and one-cell-wide strips. Diagonals connect only when both adjacent cardinals connect.\n\n" +
-      "Art roles: base slots are full-coverage, seamless plain material with no prepainted shores, roads or cliff silhouettes. " +
-      "Wall transition slots depict continuous rock/cliff faces facing ONLY the exposed floor sides, with connected cliff tops, convex outer and concave inner corners; no separate boulders or upright buildings. " +
-      "Water transition slots depict a natural shoreline with thin wet soil and restrained foam strictly inside the exposed side; connected water edges have no shore. " +
-      "Path transition slots depict a continuous road verge with compact soil/gravel and grass contact, preserving the specified entrances and junctions. " +
-      "All exposed backgrounds use the SAME floor texture as the base floor slots, never magenta or transparent holes.\n\n" +
-      "Seams: compatible edge profiles and corner patches must match in color, texture phase and scale; any base variation must connect with any other of that material. " +
-      "Keep the outer 8% compatibility bands consistent by edge topology; a material edge and a floor edge must remain distinct. " +
-      "Use one fixed light direction, low contrast diffuse light and constant cliff height. Keep cliff faces and shoreline detail inside their assigned crop; no cast shadows into adjacent cells. " +
-      "No arbitrary rotation or mirroring: orientation is fixed by each manifest entry. Do not add text, labels, grid lines, tile frames, characters or props.\n\n" +
-      "Slot manifest (identifiers are instructions, never printed on the image):\n" + entries.join("\n");
+    const manifest = [
+      "R1C1-R1C10 floor: 10 full-material variations",
+      "R2C1-R2C10 path: 10 full-material variations",
+      "R3C1-R3C10 water: 10 full-material variations",
+      "R4C1-R4C10 wall: 10 full-material variations",
+    ];
+    for (let row = 4; row < grid.rows; row++) {
+      const slots = grid.slots.filter((slot) => slot.row === row);
+      if (slots.length) manifest.push("R" + (row + 1) + "C1-R" + (row + 1) + "C" + grid.cols + " " + slots[0].kind +
+        " masks left-to-right: " + slots.map((slot) => slot.mask).join(","));
+    }
+    return style + ". Create one " + grid.sheetSize + "x" + grid.sheetSize + " image divided into " + grid.cols + " columns and " + grid.rows +
+      " rows of " + grid.tilePixels + "px square slots. Place the grid at x=" + grid.offsetX + ", y=" + grid.offsetY +
+      "; no gutters. Read rows left-to-right, top-to-bottom. Draw a centered 3:2 ground crop in each slot, y=16.67%-83.33%. " +
+      "Style: " + (BIOME_WORDS[plan.biome] || BIOME_WORDS.grassland) + "; " + (plan.prompt || "hand-painted fantasy terrain") +
+      ". Clear, compact, Q-style hand-painted textures, fixed soft lighting. No text or objects.\n\n" +
+      "Slot rows:\n" + manifest.join("\n") + "\n\n" +
+      "For transition rows, mask bits mean N, NE, E, SE, S, SW, W, NW clockwise from top; 1=that neighbor is the target material, 0=floor. " +
+      "Diagonals connect only when both adjoining cardinals connect. Each shape has target material at its center; other regions are floor. " +
+      "Walls use rocky cliff edges, water uses thin natural shores, paths use compact dirt verges. Show straight edges, end caps, isolated centers, convex corners and concave corners where a diagonal is absent. " +
+      "Keep artwork within each slot. Identifiers and masks define placement and must not appear as text.";
   }
 
   function crop(source, sx, sy, sw, sh) {

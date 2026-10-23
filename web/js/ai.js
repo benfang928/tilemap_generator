@@ -189,7 +189,10 @@
     }
     if (!res.ok) {
       const msg = (json && (json.error?.message || json.message || json.msg)) || text.slice(0, 220) || res.statusText;
-      throw new Error("接口 " + res.status + "：" + msg);
+      const error = new Error("接口 " + res.status + "：" + msg);
+      error.status = res.status;
+      error.upstreamMessage = String(msg);
+      throw error;
     }
     if (!json) throw new Error("接口返回非 JSON：" + text.slice(0, 160));
     return json;
@@ -298,6 +301,32 @@
     return null;
   }
 
+  function imageReplyText(json) {
+    if (typeof json === "string") return json;
+    const texts = [];
+    const add = (value) => { if (typeof value === "string") texts.push(value); };
+    const items = (value) => Array.isArray(value) ? value : [];
+    add(json?.output_text);
+    for (const choice of items(json?.choices)) {
+      const content = choice.message?.content;
+      if (Array.isArray(content)) content.forEach((part) => add(part.text));
+      else add(content);
+    }
+    for (const candidate of items(json?.candidates)) {
+      items(candidate.content?.parts).forEach((part) => add(part.text));
+    }
+    for (const item of items(json?.output)) {
+      items(item.content).forEach((part) => add(part.text));
+    }
+    return texts.join(" ");
+  }
+
+  function textOnlyImageMessage(reply) {
+    const excerpt = reply.replace(/<FollowUp\b[\s\S]*$/i, "").replace(/\s+/g, " ").trim().slice(0, 240);
+    return "上游返回了文字，未返回图片。请核对「AI 接口设置」中的生图模型和接口路径是否支持图片生成。" +
+      (excerpt ? " 上游摘要：" + excerpt : "");
+  }
+
   async function normalizeImage(json, cfg) {
     let found = null;
     if (cfg.imageRespPath) {
@@ -312,7 +341,10 @@
     }
     // URL 是中转返回的下载地址；若没有 URL，再使用响应内的图片数据。
     if (!found) found = deepFindImage(json, 0, false) || deepFindImage(json, 0, true);
-    if (!found) throw new Error("响应里没有找到图片数据，可在「高级」里配置响应路径");
+    if (!found) {
+      const reply = imageReplyText(json);
+      throw new Error(reply ? textOnlyImageMessage(reply) : "响应里没有找到图片数据，可在「高级」里配置响应路径");
+    }
     if (found.type === "data") return found.value;
     if (found.type === "url") return await urlToDataURL(found.value);
     return "data:image/png;base64," + found.value.replace(/\s/g, "");
@@ -357,7 +389,7 @@
   }
 
   /* ================= 生图 ================= */
-  AI.generateImage = async function (opts) {
+  async function generateImage(opts) {
     const cfg = AI.cfg();
     const provider = cfg.provider;
     const adapter = AI.adapterOf(cfg);
@@ -485,6 +517,17 @@
     }
     const json = await postJSON(base + fill(path), body);
     return await normalizeImage(json, cfg);
+  }
+
+  AI.generateImage = async function (opts) {
+    try {
+      return await generateImage(opts);
+    } catch (error) {
+      if (error.status && /<FollowUp\b/i.test(error.upstreamMessage || "")) {
+        error.message = "接口 " + error.status + "：" + textOnlyImageMessage(error.upstreamMessage);
+      }
+      throw error;
+    }
   };
 
   /* ================= 视觉 ================= */

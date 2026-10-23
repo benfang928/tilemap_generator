@@ -435,7 +435,14 @@ with sync_playwright() as pw:
     # Simulated provider failure tests the real UI -> AI -> proxy request chain.
     page.evaluate("localStorage.clear()")
     page.reload(wait_until="networkidle")
-    page.evaluate("""() => {document.querySelector('#aiKey').value='test-key';document.querySelector('#aiBase').value='https://example.test/v1';}""")
+    page.evaluate("""() => {
+      document.querySelector('#aiKey').value='test-key';
+      document.querySelector('#aiBase').value='https://ciyuanzhiyan.com/v1';
+      document.querySelector('#aiImageModel').value='gpt-image-2.5-sunburst';
+      document.querySelector('#aiImagePath').value='';
+    }""")
+    page.locator("#biome").select_option("cave")
+    page.locator("#prompt").fill("地下城副本，Q版手绘，墙壁，火炬，骨头")
     calls = []
     image_downloads = []
     page.route("https://unreachable.example/test.png", lambda route: route.abort())
@@ -445,6 +452,9 @@ with sync_playwright() as pw:
             route.fulfill(status=200, content_type="image/png", body=base64.b64decode(sheets["tiles"].split(",", 1)[1]))
             return
         body = route.request.post_data_json
+        assert route.request.url.endswith("https%3A%2F%2Fciyuanzhiyan.com%2Fv1%2Fimages%2Fgenerations")
+        assert body["model"] == "gpt-image-2.5-sunburst"
+        assert set(body) == {"model", "prompt", "n", "size"}
         calls.append(body)
         if len(calls) == 1:
             route.fulfill(status=200, json={"data": [{"url": "https://unreachable.example/test.png", "b64_json": sheets["tiles"].split(",", 1)[1]}]})
@@ -455,12 +465,34 @@ with sync_playwright() as pw:
     idle(page)
     assert len(calls) == 2
     assert len(image_downloads) == 1
-    assert "10 columns by 10 rows" in calls[0]["prompt"]
+    assert "10 columns and 10 rows" in calls[0]["prompt"]
     assert "4 columns by 2 rows" in calls[1]["prompt"]
     assert page.evaluate("!!MG.Store.project.atlas.tileURL && !MG.Store.project.atlas.objectURL")
     assert "出错" in page.locator("#conceptStatus").inner_text()
     page.unroute("**/proxy?**", fail_second)
     page.unroute("https://unreachable.example/test.png")
+
+    # A text-only relay 400 keeps the existing sheet and never follows its suggested query.
+    text_only_calls = []
+    def text_only_failure(route):
+        text_only_calls.append(route.request.post_data_json)
+        route.fulfill(status=400, json={"error": {"message":
+            '这张地下城图集的规格已经明确。<FollowUp value="生成校验图集" query="Create another atlas" />'}})
+    page.route("**/proxy?**", text_only_failure)
+    page.locator("#btnGenBoth").click()
+    idle(page)
+    assert len(text_only_calls) == 1
+    assert text_only_calls[0]["prompt"].startswith("Generate the image now.")
+    assert "from scratch using only the text in this request" in text_only_calls[0]["prompt"]
+    assert "reference image" not in text_only_calls[0]["prompt"].lower()
+    status = page.locator("#conceptStatus").inner_text()
+    assert "接口 400" in status and "文字，未返回图片" in status
+    assert "生图模型和接口路径" in status and "<FollowUp" not in status
+    assert page.evaluate("MG.Store.project.atlas.tileURL") == sheets["tiles"]
+    assert page.evaluate("!MG.Store.project.atlas.objectURL && !MG.App.busy")
+    page.screenshot(path=str(OUT / "text-only-generation-error.png"))
+    page.unroute("**/proxy?**", text_only_failure)
+
     page.route("**/proxy?**", lambda route: route.fulfill(status=200, json={"data": [{"b64_json": sheets["objects"].split(",", 1)[1]}]}))
     page.locator("#btnGenObjects").click()
     idle(page)
