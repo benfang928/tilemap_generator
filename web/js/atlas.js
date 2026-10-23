@@ -230,12 +230,23 @@
   function cell(source, index, grid, inset) {
     const col = index % grid.cols, row = Math.floor(index / grid.cols);
     const dense = grid.tilePixels && grid.sheetSize;
-    const x0 = Math.floor(dense ? (grid.offsetX + col * grid.tilePixels) * source.width / grid.sheetSize : col * source.width / grid.cols);
-    const x1 = Math.floor(dense ? (grid.offsetX + (col + 1) * grid.tilePixels) * source.width / grid.sheetSize : (col + 1) * source.width / grid.cols);
-    const y0 = Math.floor(dense ? (grid.offsetY + row * grid.tilePixels) * source.height / grid.sheetSize : row * source.height / grid.rows);
-    const y1 = Math.floor(dense ? (grid.offsetY + (row + 1) * grid.tilePixels) * source.height / grid.sheetSize : (row + 1) * source.height / grid.rows);
+    const fullBleed = dense && grid.sourceLayout === "full-bleed";
+    const x0 = Math.floor(dense ? (fullBleed ? col * source.width / grid.cols : (grid.offsetX + col * grid.tilePixels) * source.width / grid.sheetSize) : col * source.width / grid.cols);
+    const x1 = Math.floor(dense ? (fullBleed ? (col + 1) * source.width / grid.cols : (grid.offsetX + (col + 1) * grid.tilePixels) * source.width / grid.sheetSize) : (col + 1) * source.width / grid.cols);
+    const y0 = Math.floor(dense ? (fullBleed ? row * source.height / grid.rows : (grid.offsetY + row * grid.tilePixels) * source.height / grid.sheetSize) : row * source.height / grid.rows);
+    const y1 = Math.floor(dense ? (fullBleed ? (row + 1) * source.height / grid.rows : (grid.offsetY + (row + 1) * grid.tilePixels) * source.height / grid.sheetSize) : (row + 1) * source.height / grid.rows);
     const pad = Math.floor(Math.min(x1 - x0, y1 - y0) * inset / 100);
     return crop(source, x0 + pad, y0 + pad, x1 - x0 - 2 * pad, y1 - y0 - 2 * pad);
+  }
+
+  function denseSourceLayout(source, grid) {
+    if (!grid.tilePixels || !grid.sheetSize) return null;
+    const probe = U.mkCanvas(4, 1), ctx = U.ctx(probe);
+    [[0, 0], [source.width - 1, 0], [0, source.height - 1], [source.width - 1, source.height - 1]]
+      .forEach(([x, y], i) => ctx.drawImage(source, x, y, 1, 1, i, 0, 1, 1));
+    const data = ctx.getImageData(0, 0, 4, 1).data;
+    const corners = [0, 1, 2, 3].map((i) => data[i * 4 + 3]);
+    return corners.every((alpha) => alpha >= 24) ? "full-bleed" : "strict";
   }
 
   function averageColor(canvas) {
@@ -323,12 +334,14 @@
     if (Math.abs(tileImage.width / tileImage.height - 1) > 0.05) warnings.push("地砖图集不是正方形，请检查切分线");
     if (plan.version >= 2 && (tileImage.width !== plan.tiles.sheetSize || tileImage.height !== plan.tiles.sheetSize))
       warnings.push("图集实际尺寸与生成设置不同，已按比例映射槽位；请核对网格");
+    if (plan.version >= 2) {
+      plan.tiles.sourceLayout = denseSourceLayout(tileImage, plan.tiles);
+      if (plan.tiles.sourceLayout === "full-bleed") warnings.push("Dense atlas appears full-bleed; ignored the configured outer margin and used the complete grid.");
+    }
     for (const slot of plan.tiles.slots) {
       const region = cell(tileImage, slot.index, plan.tiles, inset);
       const canvas = U.mkCanvas(tileWidth, tileHeight);
-      const cropHeight = Math.min(region.height, region.width * 2 / 3);
-      const cropY = (region.height - cropHeight) / 2;
-      U.ctx(canvas).drawImage(region, 0, cropY, region.width, cropHeight, 0, 0, tileWidth, tileHeight);
+      U.ctx(canvas).drawImage(region, 0, 0, region.width, region.height, 0, 0, tileWidth, tileHeight);
       const tile = Object.assign({}, slot, { id: U.uid("t"), color: averageColor(canvas), canvas, src: U.dataURLFromCanvas(canvas), auto: true });
       tiles.push(tile);
     }
@@ -432,24 +445,44 @@
       /河|溪|水渠|\briver\b|\bstream\b/i.test(theme) ? "river" :
       /开阔|旱地|\bopen\b|\bdry\b/i.test(theme) ? "open" : "river";
     const layout = !opts.layout || opts.layout === "auto" ? preferred : opts.layout;
+    const kinds = new Array(cols * rows), waterCells = new Uint8Array(cols * rows), roadCells = new Uint8Array(cols * rows);
     for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
       const u = x / cols, v = y / rows;
       const riverCenter = cols * (0.48 + 0.1 * Math.sin(v * Math.PI * 2 + phase));
       const water = layout === "lake" ? Math.hypot((u - 0.62) * 1.3, v - 0.35) < 0.21 : layout === "open" ? false : Math.abs(x - riverCenter) < Math.max(1, cols / 24);
       const roadCenter = rows * (0.53 + 0.08 * Math.sin(u * Math.PI * 1.4 + phase));
       const road = Math.abs(y - roadCenter) < Math.max(1.5, rows / 28);
-      const rocky = U.fbm(u * 5, v * 5, seed + 71, 3) > 0.67;
-      // 道路优先贯通水域，形成桥面；不在道路上放置阻挡物。
-      const kind = road ? "path" : water ? "water" : rocky ? "wall" : "floor";
-      const tile = pickTile(kind);
       const i = y * cols + x;
+      waterCells[i] = water ? 1 : 0;
+      roadCells[i] = road ? 1 : 0;
+      // Use broad noise for rock blocks, with a finer field to keep edges irregular.
+      const rocky = !road && !water && U.fbm(u * 2.6, v * 2.6, seed + 71, 4) > 0.68 && U.fbm(u * 7, v * 7, seed + 113, 2) > 0.34;
+      kinds[i] = road ? "path" : water ? "water" : rocky ? "wall" : "floor";
+    }
+    // Remove isolated rock specks and fill only strong rock majorities. This
+    // keeps regions continuous so the renderer can draw meaningful transitions.
+    for (let pass = 0; pass < 2; pass++) {
+      const next = kinds.slice();
+      for (let y = 1; y < rows - 1; y++) for (let x = 1; x < cols - 1; x++) {
+        const i = y * cols + x;
+        if (roadCells[i] || waterCells[i]) continue;
+        const neighbors = [kinds[i - 1], kinds[i + 1], kinds[i - cols], kinds[i + cols]];
+        const rockCount = neighbors.filter((kind) => kind === "wall").length;
+        if (kinds[i] === "wall" && rockCount === 0) next[i] = "floor";
+        else if (kinds[i] === "floor" && rockCount >= 3) next[i] = "wall";
+      }
+      kinds.splice(0, kinds.length, ...next);
+    }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      const i = y * cols + x, kind = kinds[i], tile = pickTile(kind);
       back[i] = tile;
       collision[i] = tiles[tile].kind === "water" || tiles[tile].kind === "wall" ? 1 : tiles[tile].kind === "wall_low" ? 2 : tiles[tile].walk === false ? 1 : 0;
-      if (water && road && bridgeIndex >= 0 && !bridgePlaced && Math.abs(y - roadCenter) < 0.6 && Math.abs(x - riverCenter) < 0.6) {
+      const roadCenter = rows * (0.53 + 0.08 * Math.sin((x / cols) * Math.PI * 1.4 + phase));
+      if (waterCells[i] && roadCells[i] && bridgeIndex >= 0 && !bridgePlaced && Math.abs(y - roadCenter) < 0.6) {
         front[i] = bridgeIndex;
         bridgePlaced = true;
       }
-      if (!collision[i] && !road && x > 1 && y > 1 && x < cols - 2 && y < rows - 2 && rng() < 0.055 && decorationIndices.length) {
+      if (!collision[i] && !roadCells[i] && x > 1 && y > 1 && x < cols - 2 && y < rows - 2 && rng() < 0.055 && decorationIndices.length) {
         const index = decorationIndices[Math.floor(rng() * decorationIndices.length)];
         const nearby = front[i - 1] >= 0 || front[i - cols] >= 0 || front[i - cols - 1] >= 0;
         if (!nearby) { front[i] = index; if (objects[index].blocking) collision[i] = 1; }

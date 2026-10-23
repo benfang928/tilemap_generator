@@ -102,6 +102,14 @@ test("dense layouts use base materials rather than randomly placing directional 
   const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 42 });
   const layout = Atlas.layout({ plan, cols: 24, rows: 24, variation: 1 });
   assert.ok(Array.from(layout.back).every((index) => plan.tiles.slots[index].role === "base"));
+  const kinds = Array.from(layout.back, (index) => plan.tiles.slots[index].kind);
+  let matchingEdges = 0, edges = 0;
+  for (let y = 0; y < 24; y++) for (let x = 0; x < 24; x++) {
+    const i = y * 24 + x;
+    if (x + 1 < 24) { edges++; if (kinds[i] === kinds[i + 1]) matchingEdges++; }
+    if (y + 1 < 24) { edges++; if (kinds[i] === kinds[i + 24]) matchingEdges++; }
+  }
+  assert.ok(matchingEdges / edges > 0.55, "terrain kinds should form continuous regions");
 });
 
 test("normalizes all eight-neighbor combinations into 47 distinct, orientation-preserving states", () => {
@@ -162,6 +170,80 @@ test("extracts terrain tiles at independent rectangular output dimensions", asyn
   assert.equal(result.tiles.length, 16);
   assert.deepEqual([result.tiles[0].canvas.width, result.tiles[0].canvas.height], [96, 64]);
   context.window.MG.U.imgFromURL = original;
+});
+
+function rasterCanvas(width, height) {
+  const canvas = { width, height, pixels: new Uint8ClampedArray(width * height * 4) };
+  const ctx = {
+    drawImage(source, ...args) {
+      let sx = 0, sy = 0, sw = source.width, sh = source.height, dx = 0, dy = 0, dw = canvas.width, dh = canvas.height;
+      if (args.length === 2) { [dx, dy] = args; dw = source.width; dh = source.height; }
+      else if (args.length === 4) { [dx, dy, dw, dh] = args; }
+      else if (args.length === 8) { [sx, sy, sw, sh, dx, dy, dw, dh] = args; }
+      for (let y = 0; y < Math.max(0, Math.round(dh)); y++) for (let x = 0; x < Math.max(0, Math.round(dw)); x++) {
+        const srcX = Math.min(source.width - 1, Math.max(0, Math.floor(sx + x * sw / dw)));
+        const srcY = Math.min(source.height - 1, Math.max(0, Math.floor(sy + y * sh / dh)));
+        const sp = (srcY * source.width + srcX) * 4, tx = Math.round(dx + x), ty = Math.round(dy + y);
+        if (tx < 0 || ty < 0 || tx >= canvas.width || ty >= canvas.height) continue;
+        const dp = (ty * canvas.width + tx) * 4;
+        canvas.pixels.set(source.pixels.slice(sp, sp + 4), dp);
+      }
+    },
+    getImageData(sx, sy, sw, sh) {
+      const data = new Uint8ClampedArray(sw * sh * 4);
+      for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+        const src = ((sy + y) * canvas.width + sx + x) * 4, dst = (y * sw + x) * 4;
+        data.set(canvas.pixels.slice(src, src + 4), dst);
+      }
+      return { data, width: sw, height: sh };
+    },
+    putImageData(image, dx, dy) {
+      for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+        const src = (y * image.width + x) * 4, tx = dx + x, ty = dy + y;
+        if (tx < 0 || ty < 0 || tx >= canvas.width || ty >= canvas.height) continue;
+        canvas.pixels.set(image.data.slice(src, src + 4), (ty * canvas.width + tx) * 4);
+      }
+    },
+  };
+  canvas.ctx = ctx;
+  return canvas;
+}
+
+test("extracts full edges from dense full-bleed atlases and reports the detected layout", async () => {
+  const original = { img: context.window.MG.U.imgFromURL, mk: context.window.MG.U.mkCanvas, ctx: context.window.MG.U.ctx, url: context.window.MG.U.dataURLFromCanvas };
+  const source = rasterCanvas(1024, 1024);
+  for (let y = 0; y < 1024; y++) for (let x = 0; x < 1024; x++) {
+    const color = [Math.floor(y * 10 / 1024) * 10 + Math.floor(x * 10 / 1024) + 1, 40, 80, 255];
+    source.pixels.set(color, (y * 1024 + x) * 4);
+  }
+  const objects = rasterCanvas(32, 16);
+  context.window.MG.U.imgFromURL = async (url) => url === "tiles" ? source : objects;
+  context.window.MG.U.mkCanvas = rasterCanvas;
+  context.window.MG.U.ctx = (canvas) => canvas.ctx;
+  context.window.MG.U.dataURLFromCanvas = () => "data:image/png;base64,";
+  const plan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 1 });
+  const result = await Atlas.extract({ tileURL: "tiles", objectURL: "objects", plan, tileWidth: 96, tileHeight: 96 });
+  assert.equal(plan.tiles.sourceLayout, "full-bleed");
+  assert.ok(result.warnings.some((warning) => /full|full-bleed|满幅|外圈/i.test(warning)));
+  const first = result.tiles[0].canvas.pixels;
+  const last = result.tiles[0].canvas.width * result.tiles[0].canvas.height * 4 - 4;
+  assert.deepEqual(Array.from(first.slice(0, 4)), [1, 40, 80, 255]);
+  assert.deepEqual(Array.from(first.slice(last, last + 4)), [1, 40, 80, 255]);
+  const strict = rasterCanvas(1024, 1024);
+  for (let row = 0; row < 10; row++) for (let col = 0; col < 10; col++) {
+    const color = [row * 10 + col + 1, 90, 40, 255];
+    for (let y = 32 + row * 96; y < 32 + (row + 1) * 96; y++) for (let x = 32 + col * 96; x < 32 + (col + 1) * 96; x++) strict.pixels.set(color, (y * 1024 + x) * 4);
+  }
+  context.window.MG.U.imgFromURL = async (url) => url === "tiles" ? strict : objects;
+  const strictPlan = Atlas.plan({ tilePixels: 96, sheetSize: 1024, seed: 1 });
+  const strictResult = await Atlas.extract({ tileURL: "tiles", objectURL: "objects", plan: strictPlan, tileWidth: 96, tileHeight: 96 });
+  assert.equal(strictPlan.tiles.sourceLayout, "strict");
+  assert.ok(!strictResult.warnings.some((warning) => /full-bleed/i.test(warning)));
+  const strictPixels = strictResult.tiles[0].canvas.pixels;
+  assert.deepEqual(Array.from(strictPixels.slice(0, 4)), [1, 90, 40, 255]);
+  assert.deepEqual(Array.from(strictPixels.slice(strictPixels.length - 4)), [1, 90, 40, 255]);
+  context.window.MG.U.imgFromURL = original.img; context.window.MG.U.mkCanvas = original.mk;
+  context.window.MG.U.ctx = original.ctx; context.window.MG.U.dataURLFromCanvas = original.url;
 });
 
 test("automatic layout follows terrain preferences and explicit choices override them", () => {
