@@ -4,6 +4,9 @@
 一个面向 Mir / V100 风格 2D 游戏的地图生成器。它在浏览器中完成图集生成、素材提取、自动拼图和手工编辑，支持将结果导出为地图 PNG、工程文件，以及可直接用于客户端资源流程的 `.map`、`Tiles*.Lib` 和 `Objects*.Lib` 文件。
 开发讨论QQ群 714472073
 
+## 演示视频
+[https://www.bilibili.com/video/BV14Mns6iEys/](https://www.bilibili.com/video/BV14Mns6iEys/)
+
 ## 功能
 
 - 生成或上传两张规则图集：按地砖尺寸计算容量的地形图集、4×2 前景物件图集，也可选择旧版 4×4 地砖布局。
